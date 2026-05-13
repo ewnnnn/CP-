@@ -1,496 +1,1147 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
-import { Plus, Edit2, Trash2, DollarSign, ArrowUpCircle, ArrowDownCircle, Settings, LogOut, LayoutDashboard, Loader2, Save } from 'lucide-react';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { 
+  getFirestore, collection, onSnapshot, doc, setDoc, addDoc, updateDoc, deleteDoc, query, orderBy 
+} from 'firebase/firestore';
+import dayjs from 'dayjs';
+import isBetween from 'dayjs/plugin/isBetween';
+import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
+import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
+import toast, { Toaster } from 'react-hot-toast';
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, 
+  LineChart, Line, PieChart, Pie, Cell 
+} from 'recharts';
+import { 
+  LayoutDashboard, CalendarDays, BedDouble, Users, Settings, LogOut, Menu, X, 
+  Plus, Edit, Trash2, Search, Filter, Moon, Sun, Home, CheckCircle2, AlertCircle, 
+  Clock, XCircle, Download, Printer, Save, Smartphone
+} from 'lucide-react';
 
-// ==========================================
-// 1. Firebase 初始化配置
-// ==========================================
-const fallbackConfig = {
-  apiKey: "AIzaSyC3d5TBwtsWSurQVxPKIbmmzMtEkfzYqz8",
-  authDomain: "ai-b2655.firebaseapp.com",
-  projectId: "ai-b2655",
-  storageBucket: "ai-b2655.firebasestorage.app",
-  messagingSenderId: "55490465041",
-  appId: "1:55490465041:web:d11ef24e7fbc34f83c90b0",
-  measurementId: "G-CV1SE624RB"
-};
+// === Dayjs Plugins ===
+dayjs.extend(isBetween);
+dayjs.extend(isSameOrAfter);
+dayjs.extend(isSameOrBefore);
 
-// 兼容平台環境變數或使用用戶提供的配置
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : fallbackConfig;
+// === Firebase Initialization ===
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'bnb-system-default';
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-bnb-app';
 
-// ==========================================
-// 2. 主應用程式組件
-// ==========================================
-export default function App() {
-  // 系統狀態
-  const [initialLoading, setInitialLoading] = useState(true);
-  const [firebaseUser, setFirebaseUser] = useState(null);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [systemPassword, setSystemPassword] = useState('1234');
-  const [currentTab, setCurrentTab] = useState('dashboard'); // 'dashboard' | 'settings'
-  const [errorMsg, setErrorMsg] = useState('');
+// Firebase Paths (Following Sandbox Rules)
+const getColRef = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
+const getDocRef = (colName, docId) => doc(db, 'artifacts', appId, 'public', 'data', colName, docId);
 
-  // 資料狀態
-  const [transactions, setTransactions] = useState([]);
-  
-  // 表單狀態
-  const initialFormState = { date: new Date().toISOString().split('T')[0], type: 'income', category: '', amount: '', note: '' };
-  const [formData, setFormData] = useState(initialFormState);
-  const [editingId, setEditingId] = useState(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+// === Constants ===
+const THEME = {
+  light: 'bg-slate-50 text-slate-800',
+  dark: 'bg-slate-900 text-slate-100',
+  glass: 'bg-white/70 dark:bg-slate-800/70 backdrop-blur-md border border-white/20 dark:border-slate-700/50 shadow-xl',
+  input: 'w-full px-4 py-2 rounded-xl bg-white/50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all dark:text-white',
+  buttonPrimary: 'px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-200 dark:shadow-none transition-all active:scale-95 flex items-center justify-center gap-2',
+  buttonSecondary: 'px-4 py-2 rounded-xl bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all active:scale-95 flex items-center justify-center gap-2',
+  buttonDanger: 'px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-600 text-white shadow-lg shadow-rose-200 dark:shadow-none transition-all active:scale-95 flex items-center justify-center gap-2'
+};
 
-  // 登入表單狀態
-  const [inputPassword, setInputPassword] = useState('');
+const STATUS_COLORS = {
+  '已確認': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+  '待付款': 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  '已入住': 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+  '已退房': 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-400',
+  '已取消': 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400',
+};
 
-  // ==========================================
-  // 3. 初始化與資料綁定
-  // ==========================================
+// === Utility Components ===
+const Card = ({ children, className = '' }) => (
+  <div className={`rounded-2xl ${THEME.glass} p-6 ${className}`}>
+    {children}
+  </div>
+);
+
+const AnimatedNumber = ({ value }) => {
+  const [display, setDisplay] = useState(0);
   useEffect(() => {
-    let unsubscribeSnapshot = () => {};
+    let start = 0;
+    const end = parseInt(value, 10) || 0;
+    if (start === end) { setDisplay(end); return; }
+    let duration = 1000;
+    let incrementTime = (duration / end) * 2;
+    let timer = setInterval(() => {
+      start += Math.ceil(end / 20) || 1;
+      if (start >= end) {
+        setDisplay(end);
+        clearInterval(timer);
+      } else {
+        setDisplay(start);
+      }
+    }, incrementTime);
+    return () => clearInterval(timer);
+  }, [value]);
+  return <span>{display.toLocaleString()}</span>;
+};
 
-    const initSystem = async () => {
+const Modal = ({ isOpen, onClose, title, children, maxWidth = 'max-w-2xl' }) => {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className={`w-full ${maxWidth} bg-white dark:bg-slate-800 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden animate-in zoom-in-95 duration-200`}>
+        <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white">{title}</h2>
+          <button onClick={onClose} className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+            <X className="w-5 h-5 text-slate-500 dark:text-slate-400" />
+          </button>
+        </div>
+        <div className="p-6 max-h-[80vh] overflow-y-auto">
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ConfirmDialog = ({ isOpen, onClose, onConfirm, title, message }) => {
+  if (!isOpen) return null;
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title={title} maxWidth="max-w-md">
+      <p className="text-slate-600 dark:text-slate-300 mb-6">{message}</p>
+      <div className="flex justify-end gap-3">
+        <button className={THEME.buttonSecondary} onClick={onClose}>取消</button>
+        <button className={THEME.buttonDanger} onClick={() => { onConfirm(); onClose(); }}>確認刪除</button>
+      </div>
+    </Modal>
+  );
+};
+
+// === Main Application ===
+export default function App() {
+  // Global States
+  const [isFirebaseReady, setIsFirebaseReady] = useState(false);
+  const [user, setUser] = useState(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Data States
+  const [bookings, setBookings] = useState([]);
+  const [rooms, setRooms] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [settings, setSettings] = useState({ 
+    systemName: '民宿訂房管理系統', 
+    password: '1234', 
+    logo: '' 
+  });
+
+  // Initialization & Auth
+  useEffect(() => {
+    // Check dark mode preference
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+      setIsDarkMode(true);
+      document.documentElement.classList.add('dark');
+    }
+
+    // Check login state
+    const savedLogin = localStorage.getItem('bnb_auth');
+    if (savedLogin === 'true') setIsAuthenticated(true);
+
+    const initAuth = async () => {
       try {
-        // A. 處理 Firebase 匿名登入 (確保後續可讀寫)
-        if (!auth.currentUser) {
-          if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-            await signInWithCustomToken(auth, __initial_auth_token);
-          } else {
-            await signInAnonymously(auth);
-          }
-        }
-        setFirebaseUser(auth.currentUser);
-
-        // B. 讀取或初始化系統密碼設定
-        const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config');
-        const snap = await getDoc(settingsRef);
-        if (snap.exists()) {
-          setSystemPassword(snap.data().password);
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
         } else {
-          await setDoc(settingsRef, { password: '1234' });
+          await signInAnonymously(auth);
         }
-
-        // C. 檢查 LocalStorage 的登入狀態
-        const localAuth = localStorage.getItem('bnb_system_auth');
-        if (localAuth === 'true') {
-          setIsLoggedIn(true);
-        }
-
-        // D. 綁定交易紀錄 (即時更新)
-        const transRef = collection(db, 'artifacts', appId, 'public', 'data', 'transactions');
-        unsubscribeSnapshot = onSnapshot(transRef, (snapshot) => {
-          const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-          // 在記憶體中進行降序排列 (避免複雜查詢引發的索引錯誤)
-          data.sort((a, b) => new Date(b.date) - new Date(a.date));
-          setTransactions(data);
-          setInitialLoading(false);
-        }, (error) => {
-          console.error("資料讀取失敗:", error);
-          setErrorMsg("資料庫讀取失敗，請稍後再試。");
-          setInitialLoading(false);
-        });
-
-      } catch (err) {
-        console.error("系統初始化失敗:", err);
-        setErrorMsg("系統連線異常");
-        setInitialLoading(false);
+      } catch (error) {
+        console.error("Firebase Auth Error", error);
+        toast.error("資料庫連線失敗");
       }
     };
+    initAuth();
 
-    initSystem();
-
-    return () => {
-      unsubscribeSnapshot();
-    };
+    const unsubAuth = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      if (u) setIsFirebaseReady(true);
+    });
+    return () => unsubAuth();
   }, []);
 
-  // ==========================================
-  // 4. 統計計算
-  // ==========================================
-  const stats = useMemo(() => {
-    let totalIncome = 0;
-    let totalExpense = 0;
-    transactions.forEach(t => {
-      if (t.type === 'income') totalIncome += Number(t.amount);
-      if (t.type === 'expense') totalExpense += Number(t.amount);
-    });
-    return {
-      income: totalIncome,
-      expense: totalExpense,
-      balance: totalIncome - totalExpense
-    };
-  }, [transactions]);
+  // Data Fetching
+  useEffect(() => {
+    if (!user || !isFirebaseReady) return;
 
-  // ==========================================
-  // 5. 處理邏輯
-  // ==========================================
+    const errHandler = (err) => console.error("Firestore Error:", err);
+
+    const unsubBookings = onSnapshot(getColRef('bookings'), (snap) => {
+      setBookings(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => dayjs(b.checkIn).diff(dayjs(a.checkIn))));
+    }, errHandler);
+
+    const unsubRooms = onSnapshot(getColRef('rooms'), (snap) => {
+      setRooms(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => a.price - b.price));
+    }, errHandler);
+
+    const unsubCustomers = onSnapshot(getColRef('customers'), (snap) => {
+      setCustomers(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, errHandler);
+
+    const unsubSettings = onSnapshot(getDocRef('system', 'settings'), (docSnap) => {
+      if (docSnap.exists()) {
+        setSettings(prev => ({ ...prev, ...docSnap.data() }));
+      } else {
+        // Initialize settings if not exist
+        setDoc(getDocRef('system', 'settings'), settings);
+      }
+    }, errHandler);
+
+    return () => { unsubBookings(); unsubRooms(); unsubCustomers(); unsubSettings(); };
+  }, [user, isFirebaseReady]);
+
+  // Theme Toggle
+  const toggleTheme = () => {
+    setIsDarkMode(prev => {
+      const next = !prev;
+      if (next) document.documentElement.classList.add('dark');
+      else document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', next ? 'dark' : 'light');
+      return next;
+    });
+  };
+
+  // Login Handler
   const handleLogin = (e) => {
     e.preventDefault();
-    if (inputPassword === systemPassword) {
-      setIsLoggedIn(true);
-      localStorage.setItem('bnb_system_auth', 'true');
-      setInputPassword('');
-      setErrorMsg('');
+    const pwd = e.target.password.value;
+    if (pwd === settings.password) {
+      setIsAuthenticated(true);
+      localStorage.setItem('bnb_auth', 'true');
+      toast.success("登入成功");
     } else {
-      setErrorMsg('密碼錯誤，請重新輸入');
+      toast.error("密碼錯誤");
     }
   };
 
   const handleLogout = () => {
-    setIsLoggedIn(false);
-    localStorage.removeItem('bnb_system_auth');
-    setCurrentTab('dashboard');
+    setIsAuthenticated(false);
+    localStorage.removeItem('bnb_auth');
+    toast.success("已登出");
   };
 
-  const handleFormSubmit = async (e) => {
-    e.preventDefault();
-    if (!formData.date || !formData.category || !formData.amount) return;
-    
-    setIsSubmitting(true);
-    try {
-      const transRef = collection(db, 'artifacts', appId, 'public', 'data', 'transactions');
-      const payload = {
-        date: formData.date,
-        type: formData.type,
-        category: formData.category,
-        amount: Number(formData.amount),
-        note: formData.note,
-        updatedAt: new Date().toISOString()
-      };
-
-      if (editingId) {
-        await updateDoc(doc(transRef, editingId), payload);
-      } else {
-        await addDoc(transRef, payload);
-      }
-      
-      setFormData(initialFormState);
-      setEditingId(null);
-    } catch (err) {
-      console.error(err);
-      setErrorMsg("儲存失敗");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleEdit = (item) => {
-    setFormData({
-      date: item.date,
-      type: item.type,
-      category: item.category,
-      amount: item.amount,
-      note: item.note || ''
-    });
-    setEditingId(item.id);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const handleDelete = async (id) => {
-    if(confirm('確定要刪除這筆紀錄嗎？')) {
-        try {
-            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', id));
-        } catch(err) {
-            setErrorMsg("刪除失敗");
-        }
-    }
-  };
-
-  const handleUpdatePassword = async (e) => {
-    e.preventDefault();
-    const newPassword = e.target.newPassword.value;
-    if (!newPassword) return;
-    
-    try {
-      const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config');
-      await updateDoc(settingsRef, { password: newPassword });
-      setSystemPassword(newPassword);
-      setErrorMsg('密碼已成功更新！');
-      e.target.reset();
-      setTimeout(() => setErrorMsg(''), 3000);
-    } catch (err) {
-      setErrorMsg("密碼更新失敗");
-    }
-  };
-
-  // ==========================================
-  // 6. 渲染 UI
-  // ==========================================
-  
-  // A. 全螢幕載入中遮罩
-  if (initialLoading) {
+  if (!isFirebaseReady) {
     return (
-      <div className="fixed inset-0 flex flex-col items-center justify-center bg-slate-50 z-50">
-        <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" />
-        <h2 className="text-xl font-semibold text-slate-700 tracking-wider">系統載入中...</h2>
-        <p className="text-slate-400 mt-2 text-sm">正在同步最新資料</p>
+      <div className={`min-h-screen flex items-center justify-center ${THEME.light} dark:bg-slate-900 transition-colors duration-500`}>
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-lg font-medium text-slate-600 dark:text-slate-300 animate-pulse">系統載入中...</p>
+        </div>
       </div>
     );
   }
 
-  // B. 登入畫面
-  if (!isLoggedIn) {
+  if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
-        <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 transform transition-all">
+      <div className={`min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-slate-900 dark:to-indigo-950 transition-colors duration-500`}>
+        <Toaster position="top-center" />
+        <Card className="w-full max-w-md">
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-100 text-blue-600 mb-4">
-              <DollarSign className="w-8 h-8" />
+            <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-indigo-200 dark:shadow-none">
+              <Home className="w-8 h-8 text-white" />
             </div>
-            <h1 className="text-2xl font-bold text-slate-800">民宿帳務系統</h1>
-            <p className="text-slate-500 mt-2">請輸入密碼以繼續</p>
+            <h1 className="text-2xl font-bold text-slate-800 dark:text-white">{settings.systemName}</h1>
+            <p className="text-slate-500 dark:text-slate-400 mt-2">請輸入管理員密碼以繼續</p>
           </div>
-          
           <form onSubmit={handleLogin} className="space-y-6">
             <div>
-              <input
-                type="password"
-                value={inputPassword}
-                onChange={(e) => setInputPassword(e.target.value)}
-                placeholder="預設密碼為 1234"
-                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all text-center text-lg tracking-widest"
+              <input 
+                type="password" 
+                name="password"
+                placeholder="預設密碼：1234" 
+                className={THEME.input}
+                required
+                autoFocus
               />
             </div>
-            {errorMsg && <p className="text-red-500 text-sm text-center font-medium">{errorMsg}</p>}
-            <button
-              type="submit"
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl transition-colors shadow-md hover:shadow-lg"
-            >
-              進入系統
+            <button type="submit" className={`${THEME.buttonPrimary} w-full py-3 text-lg`}>
+              登入系統
             </button>
           </form>
-        </div>
+        </Card>
       </div>
     );
   }
 
-  // C. 主系統介面
+  // Navigation Items
+  const navItems = [
+    { id: 'dashboard', icon: LayoutDashboard, label: '營運總覽' },
+    { id: 'bookings', icon: CalendarDays, label: '訂房管理' },
+    { id: 'rooms', icon: BedDouble, label: '房型管理' },
+    { id: 'customers', icon: Users, label: '客戶資料' },
+    { id: 'calendar', icon: CalendarDays, label: '行事曆' },
+    { id: 'settings', icon: Settings, label: '系統設定' },
+  ];
+
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-800">
-      {/* 導覽列 */}
-      <nav className="bg-white shadow-sm sticky top-0 z-40">
-        <div className="max-w-6xl mx-auto px-4">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-2">
-              <div className="bg-blue-600 text-white p-2 rounded-lg">
-                <DollarSign className="w-5 h-5" />
+    <div className={`min-h-screen flex ${isDarkMode ? 'dark bg-slate-900' : 'bg-slate-50'} transition-colors duration-300 font-sans`}>
+      <Toaster position="top-right" toastOptions={{ className: 'dark:bg-slate-800 dark:text-white' }} />
+      
+      {/* Mobile Sidebar Overlay */}
+      {sidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-slate-900/50 z-40 lg:hidden backdrop-blur-sm animate-in fade-in"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside className={`fixed lg:static inset-y-0 left-0 z-50 w-64 ${THEME.glass} border-r border-slate-200/50 dark:border-slate-700/50 transform ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 transition-transform duration-300 ease-in-out flex flex-col`}>
+        <div className="p-6 flex items-center gap-3">
+          {settings.logo ? (
+            <img src={settings.logo} alt="Logo" className="w-10 h-10 rounded-xl object-cover" onError={(e) => e.target.style.display='none'} />
+          ) : (
+            <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
+              <Home className="w-5 h-5 text-white" />
+            </div>
+          )}
+          <h1 className="text-lg font-bold text-slate-800 dark:text-white truncate">{settings.systemName}</h1>
+        </div>
+
+        <nav className="flex-1 px-4 py-4 space-y-2 overflow-y-auto">
+          {navItems.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => { setActiveTab(item.id); setSidebarOpen(false); }}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${
+                activeTab === item.id 
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200 dark:shadow-none' 
+                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/50'
+              }`}
+            >
+              <item.icon className={`w-5 h-5 ${activeTab === item.id ? 'text-white' : ''}`} />
+              <span className="font-medium">{item.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="p-4 border-t border-slate-200/50 dark:border-slate-700/50">
+          <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-500/10 transition-colors">
+            <LogOut className="w-5 h-5" />
+            <span className="font-medium">登出系統</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden h-screen">
+        {/* Top Header */}
+        <header className={`${THEME.glass} border-b border-slate-200/50 dark:border-slate-700/50 px-6 py-4 flex items-center justify-between sticky top-0 z-30`}>
+          <div className="flex items-center gap-4">
+            <button onClick={() => setSidebarOpen(true)} className="lg:hidden p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800">
+              <Menu className="w-6 h-6 text-slate-600 dark:text-slate-300" />
+            </button>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-white">
+              {navItems.find(i => i.id === activeTab)?.label}
+            </h2>
+          </div>
+          <div className="flex items-center gap-4">
+            <button onClick={toggleTheme} className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-slate-600 dark:text-slate-300">
+              {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+            </button>
+            <div className="hidden sm:flex items-center gap-2">
+              <div className="w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-900 flex items-center justify-center text-indigo-600 dark:text-indigo-400 font-bold">
+                A
               </div>
-              <span className="font-bold text-lg hidden sm:block">民宿帳務管理</span>
+              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Admin</span>
             </div>
-            <div className="flex items-center space-x-1 sm:space-x-4">
-              <button 
-                onClick={() => setCurrentTab('dashboard')}
-                className={`px-3 py-2 rounded-lg flex items-center space-x-1 transition-colors ${currentTab === 'dashboard' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-slate-600 hover:bg-slate-100'}`}
-              >
-                <LayoutDashboard className="w-4 h-4" />
-                <span className="hidden sm:inline">看板</span>
-              </button>
-              <button 
-                onClick={() => setCurrentTab('settings')}
-                className={`px-3 py-2 rounded-lg flex items-center space-x-1 transition-colors ${currentTab === 'settings' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-slate-600 hover:bg-slate-100'}`}
-              >
-                <Settings className="w-4 h-4" />
-                <span className="hidden sm:inline">設定</span>
-              </button>
-              <div className="h-6 w-px bg-slate-200 mx-2"></div>
-              <button 
-                onClick={handleLogout}
-                className="px-3 py-2 rounded-lg flex items-center space-x-1 text-red-500 hover:bg-red-50 transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-                <span className="hidden sm:inline">登出</span>
-              </button>
+          </div>
+        </header>
+
+        {/* Content Area */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 relative">
+          {activeTab === 'dashboard' && <DashboardView bookings={bookings} rooms={rooms} />}
+          {activeTab === 'bookings' && <BookingsView bookings={bookings} rooms={rooms} />}
+          {activeTab === 'rooms' && <RoomsView rooms={rooms} />}
+          {activeTab === 'customers' && <CustomersView customers={customers} bookings={bookings} />}
+          {activeTab === 'calendar' && <CalendarView bookings={bookings} rooms={rooms} />}
+          {activeTab === 'settings' && <SettingsView settings={settings} />}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+// ==========================================
+// Views Components
+// ==========================================
+
+// --- Dashboard View ---
+function DashboardView({ bookings, rooms }) {
+  const today = dayjs().format('YYYY-MM-DD');
+  const thisMonth = dayjs().format('YYYY-MM');
+
+  const stats = useMemo(() => {
+    let todayCheckIns = 0;
+    let todayCheckOuts = 0;
+    let todayRev = 0;
+    let monthRev = 0;
+    let pending = 0;
+    let cancelled = 0;
+    let occupiedRoomsToday = new Set();
+
+    bookings.forEach(b => {
+      if (b.checkIn === today && b.status !== '已取消') todayCheckIns++;
+      if (b.checkOut === today && b.status !== '已取消') todayCheckOuts++;
+      if (b.status === '待付款') pending++;
+      if (b.status === '已取消') cancelled++;
+      
+      // Revenue calculation (only confirmed/checked-in/out)
+      if (['已確認', '已入住', '已退房'].includes(b.status)) {
+        if (b.checkIn === today) todayRev += Number(b.totalPrice);
+        if (b.checkIn.startsWith(thisMonth)) monthRev += Number(b.totalPrice);
+      }
+
+      // Occupancy
+      if (dayjs(today).isBetween(b.checkIn, b.checkOut, 'day', '[)') && b.status !== '已取消') {
+        occupiedRoomsToday.add(b.roomId);
+      }
+    });
+
+    const totalRooms = rooms.length || 1; // avoid div by 0
+    const occupancyRate = Math.round((occupiedRoomsToday.size / totalRooms) * 100);
+
+    // Chart Data
+    const monthlyRevMap = {};
+    const sourceMap = {};
+    const roomPopularityMap = {};
+
+    bookings.forEach(b => {
+      if (['已確認', '已入住', '已退房'].includes(b.status)) {
+        const m = dayjs(b.checkIn).format('MM月');
+        monthlyRevMap[m] = (monthlyRevMap[m] || 0) + Number(b.totalPrice);
+        
+        const r = rooms.find(r => r.id === b.roomId)?.name || '未知房型';
+        roomPopularityMap[r] = (roomPopularityMap[r] || 0) + 1;
+      }
+      sourceMap[b.status] = (sourceMap[b.status] || 0) + 1;
+    });
+
+    const chartDataRev = Object.keys(monthlyRevMap).sort().map(k => ({ name: k, 營收: monthlyRevMap[k] })).slice(-6);
+    const chartDataStatus = Object.keys(sourceMap).map(k => ({ name: k, value: sourceMap[k] }));
+    const chartDataRooms = Object.keys(roomPopularityMap).map(k => ({ name: k, 次數: roomPopularityMap[k] })).sort((a,b)=>b.次數-a.次數).slice(0,5);
+
+    return { 
+      todayCheckIns, todayCheckOuts, todayRev, monthRev, 
+      totalOrders: bookings.length, pending, cancelled, occupancyRate,
+      chartDataRev, chartDataStatus, chartDataRooms
+    };
+  }, [bookings, rooms, today, thisMonth]);
+
+  const StatCard = ({ title, value, icon: Icon, color, prefix = '', suffix = '' }) => (
+    <Card className="group hover:-translate-y-1 transition-all duration-300">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">{title}</p>
+          <h3 className="text-2xl font-bold text-slate-800 dark:text-white flex items-baseline gap-1">
+            {prefix}<AnimatedNumber value={value} />{suffix}
+          </h3>
+        </div>
+        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg transition-transform group-hover:scale-110 ${color}`}>
+          <Icon className="w-6 h-6" />
+        </div>
+      </div>
+    </Card>
+  );
+
+  const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6'];
+
+  return (
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
+        <StatCard title="今日入住" value={stats.todayCheckIns} icon={LogOut} color="bg-indigo-500 shadow-indigo-200" suffix=" 間" />
+        <StatCard title="今日退房" value={stats.todayCheckOuts} icon={CheckCircle2} color="bg-emerald-500 shadow-emerald-200" suffix=" 間" />
+        <StatCard title="今日營收" value={stats.todayRev} icon={BedDouble} color="bg-amber-500 shadow-amber-200" prefix="$" />
+        <StatCard title="本月營收" value={stats.monthRev} icon={CalendarDays} color="bg-purple-500 shadow-purple-200" prefix="$" />
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
+        <StatCard title="總訂單數" value={stats.totalOrders} icon={LayoutDashboard} color="bg-blue-500 shadow-blue-200" />
+        <StatCard title="待付款訂單" value={stats.pending} icon={Clock} color="bg-orange-500 shadow-orange-200" />
+        <StatCard title="已取消訂單" value={stats.cancelled} icon={XCircle} color="bg-rose-500 shadow-rose-200" />
+        <StatCard title="今日住房率" value={stats.occupancyRate} icon={Users} color="bg-teal-500 shadow-teal-200" suffix="%" />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card>
+          <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-6">近六個月營收趨勢</h3>
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={stats.chartDataRev.length ? stats.chartDataRev : [{name:'無資料', 營收:0}]}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.2} />
+                <XAxis dataKey="name" stroke="#6b7280" />
+                <YAxis stroke="#6b7280" />
+                <RechartsTooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
+                <Line type="monotone" dataKey="營收" stroke="#6366f1" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 8 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+
+        <Card>
+          <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-6">熱門房型排行</h3>
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={stats.chartDataRooms.length ? stats.chartDataRooms : [{name:'無資料', 次數:0}]} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.2} />
+                <XAxis type="number" stroke="#6b7280" />
+                <YAxis dataKey="name" type="category" width={100} stroke="#6b7280" />
+                <RechartsTooltip cursor={{fill: 'transparent'}} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
+                <Bar dataKey="次數" fill="#10b981" radius={[0, 4, 4, 0]} barSize={20} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// --- Bookings View ---
+function BookingsView({ bookings, rooms }) {
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterStatus, setFilterStatus] = useState('ALL');
+  const [deleteConfirm, setDeleteConfirm] = useState({ isOpen: false, id: null, name: '' });
+  const [formData, setFormData] = useState({
+    checkIn: '', checkOut: '', roomId: '', customerName: '', phone: '', email: '', 
+    guests: 1, totalPrice: 0, status: '待付款', notes: ''
+  });
+
+  // Calculate duration & price auto
+  useEffect(() => {
+    if (formData.checkIn && formData.checkOut && formData.roomId) {
+      const inDate = dayjs(formData.checkIn);
+      const outDate = dayjs(formData.checkOut);
+      if (outDate.isAfter(inDate)) {
+        const days = outDate.diff(inDate, 'day');
+        const room = rooms.find(r => r.id === formData.roomId);
+        if (room) {
+          setFormData(prev => ({ ...prev, totalPrice: days * room.price }));
+        }
+      }
+    }
+  }, [formData.checkIn, formData.checkOut, formData.roomId, rooms]);
+
+  const filteredBookings = useMemo(() => {
+    return bookings.filter(b => {
+      const matchSearch = b.customerName.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          b.phone.includes(searchTerm);
+      const matchStatus = filterStatus === 'ALL' || b.status === filterStatus;
+      return matchSearch && matchStatus;
+    });
+  }, [bookings, searchTerm, filterStatus]);
+
+  const openModal = (booking = null) => {
+    if (booking) {
+      setFormData(booking);
+      setEditingId(booking.id);
+    } else {
+      setFormData({
+        checkIn: dayjs().format('YYYY-MM-DD'), checkOut: dayjs().add(1, 'day').format('YYYY-MM-DD'), 
+        roomId: rooms[0]?.id || '', customerName: '', phone: '', email: '', 
+        guests: 1, totalPrice: 0, status: '待付款', notes: ''
+      });
+      setEditingId(null);
+    }
+    setIsModalOpen(true);
+  };
+
+  const checkOverlap = (checkIn, checkOut, roomId, excludeId) => {
+    return bookings.some(b => {
+      if (b.id === excludeId || b.roomId !== roomId || b.status === '已取消') return false;
+      const bIn = dayjs(b.checkIn);
+      const bOut = dayjs(b.checkOut);
+      const nIn = dayjs(checkIn);
+      const nOut = dayjs(checkOut);
+      // overlap condition
+      return nIn.isBefore(bOut) && nOut.isAfter(bIn);
+    });
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (dayjs(formData.checkOut).isSameOrBefore(formData.checkIn)) {
+      return toast.error('退房日期必須晚於入住日期');
+    }
+    if (formData.totalPrice < 0) return toast.error('金額不能為負數');
+
+    if (checkOverlap(formData.checkIn, formData.checkOut, formData.roomId, editingId)) {
+      return toast.error('該房型在所選日期已有訂房，請選擇其他日期或房型');
+    }
+
+    const dataToSave = {
+      ...formData,
+      customerName: formData.customerName.trim(),
+      phone: formData.phone.trim(),
+      updatedAt: new Date().toISOString()
+    };
+
+    try {
+      if (editingId) {
+        await updateDoc(getDocRef('bookings', editingId), dataToSave);
+        toast.success('訂房已更新');
+      } else {
+        dataToSave.createdAt = new Date().toISOString();
+        await addDoc(getColRef('bookings'), dataToSave);
+        
+        // Auto add to customers if new phone
+        addDoc(getColRef('customers'), {
+          name: dataToSave.customerName, phone: dataToSave.phone, email: dataToSave.email, 
+          idNumber: '', notes: '', lastVisit: dataToSave.checkIn
+        }).catch(e=>console.log("Customer save error ignore if dup", e));
+
+        toast.success('訂房新增成功');
+      }
+      setIsModalOpen(false);
+    } catch (error) {
+      toast.error('儲存失敗：' + error.message);
+    }
+  };
+
+  const handleDelete = async () => {
+    try {
+      await deleteDoc(getDocRef('bookings', deleteConfirm.id));
+      toast.success('訂房已刪除');
+    } catch (error) {
+      toast.error('刪除失敗');
+    }
+  };
+
+  const exportCSV = () => {
+    const headers = ['入住日期', '退房日期', '客戶姓名', '電話', '房型', '金額', '狀態', '備註'];
+    const csvContent = [
+      headers.join(','),
+      ...filteredBookings.map(b => [
+        b.checkIn, b.checkOut, `"${b.customerName}"`, `"${b.phone}"`, 
+        `"${rooms.find(r=>r.id===b.roomId)?.name||''}"`, b.totalPrice, b.status, `"${b.notes}"`
+      ].join(','))
+    ].join('\n');
+    
+    const blob = new Blob(["\ufeff"+csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `訂房紀錄_${dayjs().format('YYYYMMDD')}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div className="flex gap-2 w-full sm:w-auto">
+          <div className="relative flex-1 sm:w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input 
+              type="text" placeholder="搜尋姓名或電話..." 
+              value={searchTerm} onChange={e=>setSearchTerm(e.target.value)}
+              className={`${THEME.input} pl-10`}
+            />
+          </div>
+          <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className={THEME.input}>
+            <option value="ALL">所有狀態</option>
+            {Object.keys(STATUS_COLORS).map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+        <div className="flex gap-2 w-full sm:w-auto">
+          <button onClick={exportCSV} className={THEME.buttonSecondary}><Download className="w-4 h-4"/> 匯出</button>
+          <button onClick={() => window.print()} className={THEME.buttonSecondary}><Printer className="w-4 h-4"/> 列印</button>
+          <button onClick={() => openModal()} className={THEME.buttonPrimary}><Plus className="w-4 h-4"/> 新增訂房</button>
+        </div>
+      </div>
+
+      <Card className="p-0 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 text-sm border-b border-slate-200 dark:border-slate-700">
+                <th className="p-4 font-medium">客戶資訊</th>
+                <th className="p-4 font-medium">房型</th>
+                <th className="p-4 font-medium">入住/退房</th>
+                <th className="p-4 font-medium text-right">金額</th>
+                <th className="p-4 font-medium">狀態</th>
+                <th className="p-4 font-medium text-center">操作</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
+              {filteredBookings.length === 0 ? (
+                <tr>
+                  <td colSpan="6" className="p-8 text-center text-slate-500">目前沒有符合的訂單</td>
+                </tr>
+              ) : filteredBookings.map(b => (
+                <tr key={b.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
+                  <td className="p-4">
+                    <div className="font-medium text-slate-800 dark:text-slate-200">{b.customerName}</div>
+                    <div className="text-sm text-slate-500">{b.phone}</div>
+                  </td>
+                  <td className="p-4 text-slate-700 dark:text-slate-300">
+                    {rooms.find(r => r.id === b.roomId)?.name || '未知房型'}
+                  </td>
+                  <td className="p-4 text-sm text-slate-600 dark:text-slate-400">
+                    <div>{b.checkIn}</div>
+                    <div className="text-slate-400">至 {b.checkOut}</div>
+                  </td>
+                  <td className="p-4 text-right font-medium text-slate-800 dark:text-slate-200">
+                    ${Number(b.totalPrice).toLocaleString()}
+                  </td>
+                  <td className="p-4">
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[b.status] || 'bg-gray-100 text-gray-800'}`}>
+                      {b.status}
+                    </span>
+                  </td>
+                  <td className="p-4">
+                    <div className="flex justify-center gap-2">
+                      <button onClick={() => openModal(b)} className="p-2 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors">
+                        <Edit className="w-4 h-4" />
+                      </button>
+                      <button onClick={() => setDeleteConfirm({ isOpen: true, id: b.id, name: `${b.customerName} (${b.checkIn})` })} className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-lg transition-colors">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingId ? '編輯訂房' : '新增訂房'}>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">入住日期 *</label>
+              <input type="date" required value={formData.checkIn} onChange={e=>setFormData({...formData, checkIn: e.target.value})} className={THEME.input} />
             </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">退房日期 *</label>
+              <input type="date" required value={formData.checkOut} onChange={e=>setFormData({...formData, checkOut: e.target.value})} className={THEME.input} min={dayjs(formData.checkIn).add(1,'day').format('YYYY-MM-DD')} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">房型 *</label>
+              <select required value={formData.roomId} onChange={e=>setFormData({...formData, roomId: e.target.value})} className={THEME.input}>
+                <option value="" disabled>請選擇房型</option>
+                {rooms.map(r => <option key={r.id} value={r.id}>{r.name} (${r.price}/晚)</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">入住人數 *</label>
+              <input type="number" min="1" required value={formData.guests} onChange={e=>setFormData({...formData, guests: e.target.value})} className={THEME.input} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">客戶姓名 *</label>
+              <input type="text" required value={formData.customerName} onChange={e=>setFormData({...formData, customerName: e.target.value})} className={THEME.input} placeholder="王小明" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">聯絡電話 *</label>
+              <input type="tel" required value={formData.phone} onChange={e=>setFormData({...formData, phone: e.target.value})} className={THEME.input} placeholder="0912345678" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Email</label>
+              <input type="email" value={formData.email} onChange={e=>setFormData({...formData, email: e.target.value})} className={THEME.input} placeholder="example@email.com" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">狀態</label>
+              <select value={formData.status} onChange={e=>setFormData({...formData, status: e.target.value})} className={THEME.input}>
+                {Object.keys(STATUS_COLORS).map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">總金額 *</label>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">$</span>
+                <input type="number" min="0" required value={formData.totalPrice} onChange={e=>setFormData({...formData, totalPrice: e.target.value})} className={`${THEME.input} pl-8 font-bold text-indigo-600 dark:text-indigo-400`} />
+              </div>
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">備註</label>
+              <textarea rows="3" value={formData.notes} onChange={e=>setFormData({...formData, notes: e.target.value})} className={THEME.input} placeholder="特殊需求..." />
+            </div>
+          </div>
+          <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-700 mt-6">
+            <button type="button" onClick={() => setIsModalOpen(false)} className={THEME.buttonSecondary}>取消</button>
+            <button type="submit" className={THEME.buttonPrimary}><Save className="w-4 h-4"/> 儲存訂房</button>
+          </div>
+        </form>
+      </Modal>
+
+      <ConfirmDialog 
+        isOpen={deleteConfirm.isOpen} 
+        onClose={() => setDeleteConfirm({ isOpen: false, id: null, name: '' })}
+        onConfirm={handleDelete}
+        title="確認刪除訂房"
+        message={`確定要刪除「${deleteConfirm.name}」的訂房紀錄嗎？此操作無法復原。`}
+      />
+    </div>
+  );
+}
+
+// --- Rooms View ---
+function RoomsView({ rooms }) {
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState({ isOpen: false, id: null, name: '' });
+  const [formData, setFormData] = useState({
+    name: '', price: 0, capacity: 2, description: '', photoUrl: ''
+  });
+
+  const openModal = (room = null) => {
+    if (room) {
+      setFormData(room);
+      setEditingId(room.id);
+    } else {
+      setFormData({ name: '', price: 0, capacity: 2, description: '', photoUrl: '' });
+      setEditingId(null);
+    }
+    setIsModalOpen(true);
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (formData.price < 0) return toast.error('價格不能為負數');
+    const dataToSave = { ...formData, name: formData.name.trim() };
+    
+    try {
+      if (editingId) {
+        await updateDoc(getDocRef('rooms', editingId), dataToSave);
+        toast.success('房型已更新');
+      } else {
+        await addDoc(getColRef('rooms'), dataToSave);
+        toast.success('房型新增成功');
+      }
+      setIsModalOpen(false);
+    } catch (error) {
+      toast.error('儲存失敗：' + error.message);
+    }
+  };
+
+  const handleDelete = async () => {
+    try {
+      await deleteDoc(getDocRef('rooms', deleteConfirm.id));
+      toast.success('房型已刪除');
+    } catch (error) {
+      toast.error('刪除失敗');
+    }
+  };
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-bold text-slate-800 dark:text-white">房型管理</h2>
+        <button onClick={() => openModal()} className={THEME.buttonPrimary}><Plus className="w-4 h-4"/> 新增房型</button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+        {rooms.length === 0 ? (
+          <div className="col-span-full py-12 text-center text-slate-500">尚無房型資料，請點擊上方按鈕新增</div>
+        ) : rooms.map(room => (
+          <Card key={room.id} className="p-0 overflow-hidden group flex flex-col">
+            <div className="h-48 bg-slate-200 dark:bg-slate-700 relative overflow-hidden">
+              {room.photoUrl ? (
+                <img src={room.photoUrl} alt={room.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" onError={(e)=>e.target.style.display='none'} />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-slate-400"><BedDouble className="w-12 h-12" /></div>
+              )}
+              <div className="absolute top-4 right-4 bg-black/50 backdrop-blur-md text-white px-3 py-1 rounded-full font-bold">
+                ${room.price} / 晚
+              </div>
+            </div>
+            <div className="p-5 flex-1 flex flex-col">
+              <h3 className="text-xl font-bold text-slate-800 dark:text-white mb-2">{room.name}</h3>
+              <div className="flex items-center gap-2 text-sm text-slate-500 mb-4">
+                <Users className="w-4 h-4" /> <span>可住 {room.capacity} 人</span>
+              </div>
+              <p className="text-slate-600 dark:text-slate-400 text-sm flex-1 line-clamp-3 mb-4">{room.description}</p>
+              <div className="flex justify-end gap-2 pt-4 border-t border-slate-100 dark:border-slate-700/50">
+                <button onClick={() => openModal(room)} className="p-2 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors"><Edit className="w-4 h-4" /></button>
+                <button onClick={() => setDeleteConfirm({ isOpen: true, id: room.id, name: room.name })} className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingId ? '編輯房型' : '新增房型'}>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">房型名稱 *</label>
+            <input type="text" required value={formData.name} onChange={e=>setFormData({...formData, name: e.target.value})} className={THEME.input} />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">價格 (每晚) *</label>
+              <input type="number" min="0" required value={formData.price} onChange={e=>setFormData({...formData, price: e.target.value})} className={THEME.input} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">可入住人數 *</label>
+              <input type="number" min="1" required value={formData.capacity} onChange={e=>setFormData({...formData, capacity: e.target.value})} className={THEME.input} />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">照片 URL</label>
+            <input type="url" value={formData.photoUrl} onChange={e=>setFormData({...formData, photoUrl: e.target.value})} className={THEME.input} placeholder="https://..." />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">房型介紹</label>
+            <textarea rows="4" value={formData.description} onChange={e=>setFormData({...formData, description: e.target.value})} className={THEME.input} />
+          </div>
+          <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-700 mt-6">
+            <button type="button" onClick={() => setIsModalOpen(false)} className={THEME.buttonSecondary}>取消</button>
+            <button type="submit" className={THEME.buttonPrimary}><Save className="w-4 h-4"/> 儲存</button>
+          </div>
+        </form>
+      </Modal>
+
+      <ConfirmDialog isOpen={deleteConfirm.isOpen} onClose={() => setDeleteConfirm({ isOpen: false, id: null, name: '' })} onConfirm={handleDelete} title="確認刪除房型" message={`確定要刪除「${deleteConfirm.name}」嗎？若該房型已有歷史訂單，建議改為隱藏而非刪除以保留紀錄。`} />
+    </div>
+  );
+}
+
+// --- Customers View ---
+function CustomersView({ customers, bookings }) {
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const filteredCustomers = useMemo(() => {
+    return customers.filter(c => 
+      c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+      c.phone.includes(searchTerm) ||
+      (c.idNumber && c.idNumber.includes(searchTerm))
+    );
+  }, [customers, searchTerm]);
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="flex gap-2 max-w-sm">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <input type="text" placeholder="搜尋客戶姓名、電話或身分證..." value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} className={`${THEME.input} pl-10`} />
+        </div>
+      </div>
+
+      <Card className="p-0 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 text-sm border-b border-slate-200 dark:border-slate-700">
+                <th className="p-4 font-medium">姓名</th>
+                <th className="p-4 font-medium">聯絡方式</th>
+                <th className="p-4 font-medium">身分證/護照</th>
+                <th className="p-4 font-medium">歷史訂單數</th>
+                <th className="p-4 font-medium">備註</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
+              {filteredCustomers.length === 0 ? (
+                <tr><td colSpan="5" className="p-8 text-center text-slate-500">無客戶資料</td></tr>
+              ) : filteredCustomers.map(c => {
+                const historyCount = bookings.filter(b => b.phone === c.phone).length;
+                return (
+                  <tr key={c.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                    <td className="p-4 font-medium text-slate-800 dark:text-slate-200">{c.name}</td>
+                    <td className="p-4 text-sm text-slate-600 dark:text-slate-400">
+                      <div>{c.phone}</div>
+                      <div>{c.email}</div>
+                    </td>
+                    <td className="p-4 text-sm text-slate-600 dark:text-slate-400">{c.idNumber || '-'}</td>
+                    <td className="p-4 text-sm font-medium text-indigo-600 dark:text-indigo-400">{historyCount} 筆</td>
+                    <td className="p-4 text-sm text-slate-500 truncate max-w-xs">{c.notes || '-'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// --- Calendar View ---
+function CalendarView({ bookings, rooms }) {
+  const [currentDate, setCurrentDate] = useState(dayjs());
+  const [selectedDay, setSelectedDay] = useState(null);
+
+  const daysInMonth = currentDate.daysInMonth();
+  const firstDayOfMonth = currentDate.startOf('month').day();
+  
+  const generateCalendar = () => {
+    const days = [];
+    for (let i = 0; i < firstDayOfMonth; i++) days.push(null);
+    for (let i = 1; i <= daysInMonth; i++) days.push(currentDate.date(i));
+    return days;
+  };
+
+  const getBookingsForDay = (dateStr) => {
+    return bookings.filter(b => b.status !== '已取消' && dayjs(dateStr).isBetween(b.checkIn, b.checkOut, 'day', '[)'));
+  };
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500 flex flex-col lg:flex-row gap-6">
+      <Card className="flex-1">
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white">{currentDate.format('YYYY年 MM月')}</h2>
+          <div className="flex gap-2">
+            <button onClick={() => setCurrentDate(c => c.subtract(1, 'month'))} className={THEME.buttonSecondary}>上個月</button>
+            <button onClick={() => setCurrentDate(dayjs())} className={THEME.buttonSecondary}>今天</button>
+            <button onClick={() => setCurrentDate(c => c.add(1, 'month'))} className={THEME.buttonSecondary}>下個月</button>
           </div>
         </div>
-      </nav>
-
-      {/* 主要內容區 */}
-      <main className="max-w-6xl mx-auto px-4 py-8">
         
-        {/* 全局錯誤提示 */}
-        {errorMsg && currentTab === 'dashboard' && (
-          <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-xl border border-red-100 flex items-center justify-between">
-            <span>{errorMsg}</span>
-            <button onClick={() => setErrorMsg('')} className="text-red-400 hover:text-red-600">✕</button>
-          </div>
-        )}
+        <div className="grid grid-cols-7 gap-1 sm:gap-2 text-center text-sm mb-2">
+          {['日', '一', '二', '三', '四', '五', '六'].map(d => <div key={d} className="font-bold text-slate-500 py-2">{d}</div>)}
+        </div>
+        <div className="grid grid-cols-7 gap-1 sm:gap-2">
+          {generateCalendar().map((day, idx) => {
+            if (!day) return <div key={`empty-${idx}`} className="p-2" />;
+            const dateStr = day.format('YYYY-MM-DD');
+            const dayBookings = getBookingsForDay(dateStr);
+            const isToday = day.isSame(dayjs(), 'day');
+            const isFull = dayBookings.length >= (rooms.length || 1); // rough full check
+            const isSelected = selectedDay === dateStr;
 
-        {currentTab === 'dashboard' && (
-          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            
-            {/* 統計卡片 */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 relative overflow-hidden">
-                <div className="absolute -right-4 -top-4 text-green-50 opacity-50"><ArrowUpCircle className="w-32 h-32" /></div>
-                <div className="relative z-10">
-                  <p className="text-sm font-medium text-slate-500 mb-1">總收入</p>
-                  <h3 className="text-3xl font-bold text-green-600">NT$ {stats.income.toLocaleString()}</h3>
+            return (
+              <div 
+                key={dateStr}
+                onClick={() => setSelectedDay(dateStr)}
+                className={`min-h-[80px] p-1 sm:p-2 border rounded-xl cursor-pointer transition-all ${
+                  isSelected ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30' : 
+                  isToday ? 'border-amber-400 bg-amber-50 dark:bg-amber-900/20' : 
+                  'border-slate-200 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                }`}
+              >
+                <div className={`text-xs sm:text-sm font-medium w-6 h-6 flex items-center justify-center rounded-full ${isToday ? 'bg-amber-500 text-white' : 'text-slate-700 dark:text-slate-300'}`}>
+                  {day.date()}
                 </div>
-              </div>
-              
-              <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 relative overflow-hidden">
-                <div className="absolute -right-4 -top-4 text-red-50 opacity-50"><ArrowDownCircle className="w-32 h-32" /></div>
-                <div className="relative z-10">
-                  <p className="text-sm font-medium text-slate-500 mb-1">總支出</p>
-                  <h3 className="text-3xl font-bold text-red-500">NT$ {stats.expense.toLocaleString()}</h3>
-                </div>
-              </div>
-              
-              <div className="bg-blue-600 rounded-2xl p-6 shadow-md text-white relative overflow-hidden">
-                <div className="absolute -right-4 -top-4 text-blue-500 opacity-30"><DollarSign className="w-32 h-32" /></div>
-                <div className="relative z-10">
-                  <p className="text-sm font-medium text-blue-100 mb-1">目前結餘</p>
-                  <h3 className="text-3xl font-bold">NT$ {stats.balance.toLocaleString()}</h3>
-                </div>
-              </div>
-            </div>
-
-            {/* 新增/編輯表單 */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-              <div className="border-b border-slate-100 bg-slate-50/50 p-4">
-                <h3 className="font-semibold flex items-center text-slate-700">
-                  {editingId ? <Edit2 className="w-4 h-4 mr-2 text-blue-500"/> : <Plus className="w-4 h-4 mr-2 text-blue-500"/>}
-                  {editingId ? '編輯紀錄' : '新增帳務'}
-                </h3>
-              </div>
-              <form onSubmit={handleFormSubmit} className="p-5">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-500">日期</label>
-                    <input type="date" required value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none text-sm transition-all" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-500">類型</label>
-                    <select value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none text-sm transition-all">
-                      <option value="income">收入</option>
-                      <option value="expense">支出</option>
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-500">分類 (如: 住宿費、水電)</label>
-                    <input type="text" required placeholder="請輸入分類" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none text-sm transition-all" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-500">金額</label>
-                    <input type="number" required min="0" placeholder="0" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none text-sm transition-all" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-500">備註</label>
-                    <input type="text" placeholder="選填" value={formData.note} onChange={e => setFormData({...formData, note: e.target.value})} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none text-sm transition-all" />
-                  </div>
-                </div>
-                
-                <div className="mt-5 flex items-center justify-end space-x-3">
-                  {editingId && (
-                    <button type="button" onClick={() => {setEditingId(null); setFormData(initialFormState);}} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
-                      取消編輯
-                    </button>
-                  )}
-                  <button type="submit" disabled={isSubmitting} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg flex items-center shadow-sm transition-colors disabled:opacity-50">
-                    {isSubmitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Save className="w-4 h-4 mr-2"/>}
-                    {editingId ? '更新紀錄' : '儲存紀錄'}
-                  </button>
-                </div>
-              </form>
-            </div>
-
-            {/* 列表呈現 (卡片式) */}
-            <div className="space-y-4">
-              <h3 className="font-semibold text-slate-700 px-1">近期帳務紀錄</h3>
-              {transactions.length === 0 ? (
-                <div className="text-center py-12 bg-white rounded-2xl border border-slate-100 border-dashed">
-                  <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-slate-50 text-slate-400 mb-3">
-                    <LayoutDashboard className="w-6 h-6" />
-                  </div>
-                  <p className="text-slate-500 font-medium">目前尚無任何紀錄</p>
-                  <p className="text-sm text-slate-400 mt-1">請使用上方表單新增第一筆資料</p>
-                </div>
-              ) : (
-                <div className="grid gap-3">
-                  {transactions.map((item) => (
-                    <div key={item.id} className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div className="flex items-center gap-4">
-                        <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 ${item.type === 'income' ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-500'}`}>
-                          {item.type === 'income' ? <ArrowUpCircle className="w-6 h-6" /> : <ArrowDownCircle className="w-6 h-6" />}
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-bold text-slate-800">{item.category}</span>
-                            <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">{item.date}</span>
-                          </div>
-                          {item.note && <p className="text-sm text-slate-500">{item.note}</p>}
-                        </div>
-                      </div>
-                      
-                      <div className="flex items-center justify-between sm:justify-end gap-6 sm:w-1/3">
-                        <span className={`text-lg font-bold ${item.type === 'income' ? 'text-green-600' : 'text-red-500'}`}>
-                          {item.type === 'income' ? '+' : '-'} NT$ {Number(item.amount).toLocaleString()}
-                        </span>
-                        
-                        <div className="flex items-center gap-2">
-                          <button onClick={() => handleEdit(item)} className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors">
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          <button onClick={() => handleDelete(item.id)} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {dayBookings.length > 0 && (
+                    <div className={`text-[10px] sm:text-xs px-1.5 py-0.5 rounded text-white truncate w-full ${isFull ? 'bg-rose-500' : 'bg-indigo-500'}`}>
+                      {dayBookings.length} 間訂房
                     </div>
-                  ))}
+                  )}
                 </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* Side Panel for selected day */}
+      <div className="w-full lg:w-80">
+        <Card className="h-full">
+          <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-4 border-b border-slate-100 dark:border-slate-700 pb-2">
+            {selectedDay ? dayjs(selectedDay).format('YYYY-MM-DD') : '請選擇日期'}
+          </h3>
+          {selectedDay ? (
+            <div className="space-y-3">
+              {getBookingsForDay(selectedDay).length === 0 ? (
+                <p className="text-sm text-slate-500 text-center py-4">本日尚無訂房</p>
+              ) : (
+                getBookingsForDay(selectedDay).map(b => (
+                  <div key={b.id} className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-100 dark:border-slate-700 text-sm">
+                    <div className="font-bold text-slate-800 dark:text-white flex justify-between">
+                      {rooms.find(r=>r.id===b.roomId)?.name}
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full ${STATUS_COLORS[b.status]}`}>{b.status}</span>
+                    </div>
+                    <div className="text-slate-600 dark:text-slate-400 mt-1">{b.customerName} ({b.phone})</div>
+                    <div className="text-slate-400 text-xs mt-1">退房: {b.checkOut}</div>
+                  </div>
+                ))
               )}
             </div>
+          ) : (
+            <p className="text-sm text-slate-500">點擊左側日曆查看當日入住名單</p>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
 
+// --- Settings View ---
+function SettingsView({ settings }) {
+  const [formData, setFormData] = useState(settings);
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => { setFormData(settings); }, [settings]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (formData.password.trim() === '') return toast.error('密碼不能為空');
+    setIsSaving(true);
+    try {
+      await setDoc(getDocRef('system', 'settings'), formData);
+      toast.success('設定已儲存');
+      // Update local storage if password changed to avoid instant logout
+      if (formData.password !== settings.password) {
+        toast.success('密碼已更新，下次登入請使用新密碼');
+      }
+    } catch (error) {
+      toast.error('儲存失敗');
+    }
+    setIsSaving(false);
+  };
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500 max-w-2xl mx-auto">
+      <Card>
+        <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-6 flex items-center gap-2">
+          <Settings className="w-5 h-5 text-indigo-500"/> 系統設定
+        </h2>
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">系統名稱</label>
+            <input type="text" value={formData.systemName} onChange={e=>setFormData({...formData, systemName: e.target.value})} className={THEME.input} required />
           </div>
-        )}
-
-        {/* 設定分頁 */}
-        {currentTab === 'settings' && (
-          <div className="max-w-xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-              <div className="flex items-center mb-6 border-b border-slate-100 pb-4">
-                <Settings className="w-6 h-6 text-slate-400 mr-3" />
-                <h2 className="text-xl font-bold text-slate-800">系統設定</h2>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">民宿 Logo URL</label>
+            <input type="url" value={formData.logo} onChange={e=>setFormData({...formData, logo: e.target.value})} className={THEME.input} placeholder="https://..." />
+          </div>
+          <div className="pt-4 border-t border-slate-100 dark:border-slate-700">
+            <h3 className="text-md font-bold text-slate-800 dark:text-white mb-4">安全設定</h3>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">登入密碼</label>
+            <input type="text" value={formData.password} onChange={e=>setFormData({...formData, password: e.target.value})} className={THEME.input} required minLength="4" />
+            <p className="text-xs text-slate-500 mt-1">此密碼用於登入管理系統，請妥善保管。</p>
+          </div>
+          <div className="pt-4 border-t border-slate-100 dark:border-slate-700">
+            <h3 className="text-md font-bold text-slate-800 dark:text-white mb-4">開發者設定</h3>
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/50 rounded-xl p-4 flex gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+              <div className="text-sm text-amber-800 dark:text-amber-200">
+                <p className="font-bold mb-1">Firebase 連線狀態：正常</p>
+                <p>目前系統執行於隔離環境，Firebase 設定由系統自動注入以確保功能運作正常。若需在本機運行，請替換程式碼開頭的 `firebaseConfig`。</p>
               </div>
-              
-              <form onSubmit={handleUpdatePassword} className="space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">修改登入密碼</label>
-                  <input
-                    type="text"
-                    name="newPassword"
-                    placeholder="請輸入新密碼"
-                    required
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                  />
-                  <p className="text-xs text-slate-400 mt-2">修改後，下次登入將需要使用新密碼。這不會登出您目前的裝置。</p>
-                </div>
-                
-                {errorMsg && currentTab === 'settings' && (
-                  <p className={`text-sm font-medium ${errorMsg.includes('成功') ? 'text-green-600' : 'text-red-500'}`}>
-                    {errorMsg}
-                  </p>
-                )}
-
-                <button
-                  type="submit"
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-6 rounded-lg transition-colors shadow-sm"
-                >
-                  更新密碼
-                </button>
-              </form>
             </div>
           </div>
-        )}
+          
+          <div className="flex justify-end pt-6">
+            <button type="submit" disabled={isSaving} className={THEME.buttonPrimary}>
+              {isSaving ? '儲存中...' : <><Save className="w-4 h-4"/> 儲存設定</>}
+            </button>
+          </div>
+        </form>
+      </Card>
 
-      </main>
+      <Card className="bg-gradient-to-br from-indigo-500 to-purple-600 text-white border-none">
+        <div className="flex items-center gap-4">
+          <div className="p-3 bg-white/20 rounded-xl"><Smartphone className="w-6 h-6" /></div>
+          <div>
+            <h3 className="font-bold text-lg">安裝為桌面應用程式 (PWA)</h3>
+            <p className="text-indigo-100 text-sm mt-1">您可以將此系統加入手機主畫面或電腦桌面，獲得更佳的全螢幕體驗。</p>
+          </div>
+        </div>
+      </Card>
     </div>
   );
 }
