@@ -1,37 +1,51 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { 
-  getFirestore, collection, onSnapshot, doc, setDoc, addDoc, updateDoc, deleteDoc, query, orderBy 
+  getFirestore, collection, onSnapshot, doc, setDoc, addDoc, updateDoc, deleteDoc 
 } from 'firebase/firestore';
-import dayjs from 'dayjs';
-import isBetween from 'dayjs/plugin/isBetween';
-import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
-import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
-import toast, { Toaster } from 'react-hot-toast';
-import { 
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, 
-  LineChart, Line, PieChart, Pie, Cell 
-} from 'recharts';
 import { 
   LayoutDashboard, CalendarDays, BedDouble, Users, Settings, LogOut, Menu, X, 
   Plus, Edit, Trash2, Search, Filter, Moon, Sun, Home, CheckCircle2, AlertCircle, 
   Clock, XCircle, Download, Printer, Save, Smartphone
 } from 'lucide-react';
 
-// === Dayjs Plugins ===
-dayjs.extend(isBetween);
-dayjs.extend(isSameOrAfter);
-dayjs.extend(isSameOrBefore);
+// === Native Date Utilities (Replacing dayjs) ===
+const formatDate = (date) => {
+  const d = new Date(date);
+  return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-');
+};
+const getToday = () => formatDate(new Date());
+const getThisMonth = () => getToday().substring(0, 7);
+const addDays = (dateStr, days) => {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return formatDate(d);
+};
+const diffDays = (dateStr1, dateStr2) => {
+  const d1 = new Date(dateStr1);
+  const d2 = new Date(dateStr2);
+  return Math.max(0, Math.round((d2 - d1) / 86400000));
+};
+const isBetweenDates = (target, start, end) => target >= start && target < end;
 
 // === Firebase Initialization ===
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const fallbackConfig = {
+  apiKey: "AIzaSyC3d5TBwtsWSurQVxPKIbmmzMtEkfzYqz8",
+  authDomain: "ai-b2655.firebaseapp.com",
+  projectId: "ai-b2655",
+  storageBucket: "ai-b2655.firebasestorage.app",
+  messagingSenderId: "55490465041",
+  appId: "1:55490465041:web:d11ef24e7fbc34f83c90b0",
+  measurementId: "G-CV1SE624RB"
+};
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : fallbackConfig;
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-bnb-app';
 
-// Firebase Paths (Following Sandbox Rules)
+// Firebase Paths
 const getColRef = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
 const getDocRef = (colName, docId) => doc(db, 'artifacts', appId, 'public', 'data', colName, docId);
 
@@ -124,6 +138,7 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [toastMsg, setToastMsg] = useState(null);
 
   // Data States
   const [bookings, setBookings] = useState([]);
@@ -135,16 +150,19 @@ export default function App() {
     logo: '' 
   });
 
+  const showToast = (msg, type = 'success') => {
+    setToastMsg({ msg, type });
+    setTimeout(() => setToastMsg(null), 3000);
+  };
+
   // Initialization & Auth
   useEffect(() => {
-    // Check dark mode preference
     const savedTheme = localStorage.getItem('theme');
     if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
       setIsDarkMode(true);
       document.documentElement.classList.add('dark');
     }
 
-    // Check login state
     const savedLogin = localStorage.getItem('bnb_auth');
     if (savedLogin === 'true') setIsAuthenticated(true);
 
@@ -157,7 +175,7 @@ export default function App() {
         }
       } catch (error) {
         console.error("Firebase Auth Error", error);
-        toast.error("資料庫連線失敗");
+        showToast("資料庫連線失敗", "error");
       }
     };
     initAuth();
@@ -176,7 +194,7 @@ export default function App() {
     const errHandler = (err) => console.error("Firestore Error:", err);
 
     const unsubBookings = onSnapshot(getColRef('bookings'), (snap) => {
-      setBookings(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => dayjs(b.checkIn).diff(dayjs(a.checkIn))));
+      setBookings(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => new Date(b.checkIn) - new Date(a.checkIn)));
     }, errHandler);
 
     const unsubRooms = onSnapshot(getColRef('rooms'), (snap) => {
@@ -191,7 +209,6 @@ export default function App() {
       if (docSnap.exists()) {
         setSettings(prev => ({ ...prev, ...docSnap.data() }));
       } else {
-        // Initialize settings if not exist
         setDoc(getDocRef('system', 'settings'), settings);
       }
     }, errHandler);
@@ -217,16 +234,16 @@ export default function App() {
     if (pwd === settings.password) {
       setIsAuthenticated(true);
       localStorage.setItem('bnb_auth', 'true');
-      toast.success("登入成功");
+      showToast("登入成功");
     } else {
-      toast.error("密碼錯誤");
+      showToast("密碼錯誤", "error");
     }
   };
 
   const handleLogout = () => {
     setIsAuthenticated(false);
     localStorage.removeItem('bnb_auth');
-    toast.success("已登出");
+    showToast("已登出");
   };
 
   if (!isFirebaseReady) {
@@ -243,7 +260,12 @@ export default function App() {
   if (!isAuthenticated) {
     return (
       <div className={`min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-slate-900 dark:to-indigo-950 transition-colors duration-500`}>
-        <Toaster position="top-center" />
+        {toastMsg && (
+          <div className={`fixed top-4 right-4 z-50 px-6 py-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-top-4 ${toastMsg.type === 'error' ? 'bg-rose-500' : 'bg-emerald-500'} text-white`}>
+            {toastMsg.type === 'error' ? <AlertCircle className="w-5 h-5"/> : <CheckCircle2 className="w-5 h-5"/>}
+            <span className="font-medium">{toastMsg.msg}</span>
+          </div>
+        )}
         <Card className="w-full max-w-md">
           <div className="text-center mb-8">
             <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-indigo-200 dark:shadow-none">
@@ -254,25 +276,15 @@ export default function App() {
           </div>
           <form onSubmit={handleLogin} className="space-y-6">
             <div>
-              <input 
-                type="password" 
-                name="password"
-                placeholder="預設密碼：1234" 
-                className={THEME.input}
-                required
-                autoFocus
-              />
+              <input type="password" name="password" placeholder="預設密碼：1234" className={THEME.input} required autoFocus />
             </div>
-            <button type="submit" className={`${THEME.buttonPrimary} w-full py-3 text-lg`}>
-              登入系統
-            </button>
+            <button type="submit" className={`${THEME.buttonPrimary} w-full py-3 text-lg`}>登入系統</button>
           </form>
         </Card>
       </div>
     );
   }
 
-  // Navigation Items
   const navItems = [
     { id: 'dashboard', icon: LayoutDashboard, label: '營運總覽' },
     { id: 'bookings', icon: CalendarDays, label: '訂房管理' },
@@ -284,14 +296,17 @@ export default function App() {
 
   return (
     <div className={`min-h-screen flex ${isDarkMode ? 'dark bg-slate-900' : 'bg-slate-50'} transition-colors duration-300 font-sans`}>
-      <Toaster position="top-right" toastOptions={{ className: 'dark:bg-slate-800 dark:text-white' }} />
+      {/* Toast Notification */}
+      {toastMsg && (
+        <div className={`fixed top-4 right-4 z-[999] px-6 py-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-top-4 ${toastMsg.type === 'error' ? 'bg-rose-500' : 'bg-emerald-500'} text-white`}>
+          {toastMsg.type === 'error' ? <AlertCircle className="w-5 h-5"/> : <CheckCircle2 className="w-5 h-5"/>}
+          <span className="font-medium">{toastMsg.msg}</span>
+        </div>
+      )}
       
       {/* Mobile Sidebar Overlay */}
       {sidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-slate-900/50 z-40 lg:hidden backdrop-blur-sm animate-in fade-in"
-          onClick={() => setSidebarOpen(false)}
-        />
+        <div className="fixed inset-0 bg-slate-900/50 z-40 lg:hidden backdrop-blur-sm animate-in fade-in" onClick={() => setSidebarOpen(false)} />
       )}
 
       {/* Sidebar */}
@@ -360,11 +375,11 @@ export default function App() {
         {/* Content Area */}
         <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 relative">
           {activeTab === 'dashboard' && <DashboardView bookings={bookings} rooms={rooms} />}
-          {activeTab === 'bookings' && <BookingsView bookings={bookings} rooms={rooms} />}
-          {activeTab === 'rooms' && <RoomsView rooms={rooms} />}
+          {activeTab === 'bookings' && <BookingsView bookings={bookings} rooms={rooms} showToast={showToast} />}
+          {activeTab === 'rooms' && <RoomsView rooms={rooms} showToast={showToast} />}
           {activeTab === 'customers' && <CustomersView customers={customers} bookings={bookings} />}
           {activeTab === 'calendar' && <CalendarView bookings={bookings} rooms={rooms} />}
-          {activeTab === 'settings' && <SettingsView settings={settings} />}
+          {activeTab === 'settings' && <SettingsView settings={settings} showToast={showToast} />}
         </div>
       </main>
     </div>
@@ -375,10 +390,9 @@ export default function App() {
 // Views Components
 // ==========================================
 
-// --- Dashboard View ---
 function DashboardView({ bookings, rooms }) {
-  const today = dayjs().format('YYYY-MM-DD');
-  const thisMonth = dayjs().format('YYYY-MM');
+  const today = getToday();
+  const thisMonth = getThisMonth();
 
   const stats = useMemo(() => {
     let todayCheckIns = 0;
@@ -389,53 +403,46 @@ function DashboardView({ bookings, rooms }) {
     let cancelled = 0;
     let occupiedRoomsToday = new Set();
 
+    const monthlyRevMap = {};
+    const roomPopularityMap = {};
+
     bookings.forEach(b => {
       if (b.checkIn === today && b.status !== '已取消') todayCheckIns++;
       if (b.checkOut === today && b.status !== '已取消') todayCheckOuts++;
       if (b.status === '待付款') pending++;
       if (b.status === '已取消') cancelled++;
       
-      // Revenue calculation (only confirmed/checked-in/out)
       if (['已確認', '已入住', '已退房'].includes(b.status)) {
         if (b.checkIn === today) todayRev += Number(b.totalPrice);
         if (b.checkIn.startsWith(thisMonth)) monthRev += Number(b.totalPrice);
-      }
 
-      // Occupancy
-      if (dayjs(today).isBetween(b.checkIn, b.checkOut, 'day', '[)') && b.status !== '已取消') {
-        occupiedRoomsToday.add(b.roomId);
-      }
-    });
-
-    const totalRooms = rooms.length || 1; // avoid div by 0
-    const occupancyRate = Math.round((occupiedRoomsToday.size / totalRooms) * 100);
-
-    // Chart Data
-    const monthlyRevMap = {};
-    const sourceMap = {};
-    const roomPopularityMap = {};
-
-    bookings.forEach(b => {
-      if (['已確認', '已入住', '已退房'].includes(b.status)) {
-        const m = dayjs(b.checkIn).format('MM月');
+        const m = String(new Date(b.checkIn).getMonth() + 1).padStart(2, '0') + '月';
         monthlyRevMap[m] = (monthlyRevMap[m] || 0) + Number(b.totalPrice);
         
         const r = rooms.find(r => r.id === b.roomId)?.name || '未知房型';
         roomPopularityMap[r] = (roomPopularityMap[r] || 0) + 1;
       }
-      sourceMap[b.status] = (sourceMap[b.status] || 0) + 1;
+
+      if (isBetweenDates(today, b.checkIn, b.checkOut) && b.status !== '已取消') {
+        occupiedRoomsToday.add(b.roomId);
+      }
     });
 
+    const totalRooms = rooms.length || 1;
+    const occupancyRate = Math.round((occupiedRoomsToday.size / totalRooms) * 100);
+
     const chartDataRev = Object.keys(monthlyRevMap).sort().map(k => ({ name: k, 營收: monthlyRevMap[k] })).slice(-6);
-    const chartDataStatus = Object.keys(sourceMap).map(k => ({ name: k, value: sourceMap[k] }));
     const chartDataRooms = Object.keys(roomPopularityMap).map(k => ({ name: k, 次數: roomPopularityMap[k] })).sort((a,b)=>b.次數-a.次數).slice(0,5);
 
     return { 
       todayCheckIns, todayCheckOuts, todayRev, monthRev, 
       totalOrders: bookings.length, pending, cancelled, occupancyRate,
-      chartDataRev, chartDataStatus, chartDataRooms
+      chartDataRev, chartDataRooms
     };
   }, [bookings, rooms, today, thisMonth]);
+
+  const maxRev = Math.max(...stats.chartDataRev.map(d => d.營收), 1);
+  const maxPop = Math.max(...stats.chartDataRooms.map(d => d.次數), 1);
 
   const StatCard = ({ title, value, icon: Icon, color, prefix = '', suffix = '' }) => (
     <Card className="group hover:-translate-y-1 transition-all duration-300">
@@ -452,8 +459,6 @@ function DashboardView({ bookings, rooms }) {
       </div>
     </Card>
   );
-
-  const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6'];
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -474,40 +479,55 @@ function DashboardView({ bookings, rooms }) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
           <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-6">近六個月營收趨勢</h3>
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={stats.chartDataRev.length ? stats.chartDataRev : [{name:'無資料', 營收:0}]}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.2} />
-                <XAxis dataKey="name" stroke="#6b7280" />
-                <YAxis stroke="#6b7280" />
-                <RechartsTooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
-                <Line type="monotone" dataKey="營收" stroke="#6366f1" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 8 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+          {stats.chartDataRev.length === 0 ? (
+            <div className="h-72 flex items-center justify-center text-slate-500">尚無營收資料</div>
+          ) : (
+            <div className="h-72 flex items-end gap-2 sm:gap-4 pt-4 border-b border-slate-100 dark:border-slate-800 pb-2">
+              {stats.chartDataRev.map((d, i) => {
+                const heightPct = (d.營收 / maxRev) * 100;
+                return (
+                  <div key={i} className="flex-1 flex flex-col items-center gap-2 group h-full">
+                    <div className="w-full bg-indigo-50 dark:bg-indigo-900/20 rounded-t-lg relative flex-1 flex items-end justify-center">
+                      <div className="w-full bg-indigo-500 rounded-t-lg transition-all duration-500 group-hover:bg-indigo-400" style={{ height: `${heightPct}%` }}></div>
+                      <div className="absolute bottom-full mb-2 opacity-0 group-hover:opacity-100 bg-slate-800 text-white text-xs px-2 py-1 rounded transition-opacity whitespace-nowrap z-10 pointer-events-none">
+                        ${d.營收.toLocaleString()}
+                      </div>
+                    </div>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">{d.name}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </Card>
 
         <Card>
           <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-6">熱門房型排行</h3>
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={stats.chartDataRooms.length ? stats.chartDataRooms : [{name:'無資料', 次數:0}]} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.2} />
-                <XAxis type="number" stroke="#6b7280" />
-                <YAxis dataKey="name" type="category" width={100} stroke="#6b7280" />
-                <RechartsTooltip cursor={{fill: 'transparent'}} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
-                <Bar dataKey="次數" fill="#10b981" radius={[0, 4, 4, 0]} barSize={20} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          {stats.chartDataRooms.length === 0 ? (
+            <div className="h-72 flex items-center justify-center text-slate-500">尚無房型資料</div>
+          ) : (
+            <div className="h-72 flex flex-col justify-center gap-4">
+              {stats.chartDataRooms.map((d, i) => {
+                const widthPct = (d.次數 / maxPop) * 100;
+                return (
+                  <div key={i} className="flex items-center gap-3 sm:gap-4 group">
+                    <span className="w-24 text-right text-sm text-slate-600 dark:text-slate-300 truncate" title={d.name}>{d.name}</span>
+                    <div className="flex-1 bg-emerald-50 dark:bg-emerald-900/20 h-6 rounded-full overflow-hidden relative">
+                      <div className="h-full bg-emerald-500 transition-all duration-500 group-hover:bg-emerald-400" style={{ width: `${widthPct}%` }}></div>
+                    </div>
+                    <span className="w-8 text-sm font-medium text-slate-700 dark:text-slate-200">{d.次數}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </Card>
       </div>
     </div>
   );
 }
 
-// --- Bookings View ---
-function BookingsView({ bookings, rooms }) {
+function BookingsView({ bookings, rooms, showToast }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -518,25 +538,19 @@ function BookingsView({ bookings, rooms }) {
     guests: 1, totalPrice: 0, status: '待付款', notes: ''
   });
 
-  // Calculate duration & price auto
   useEffect(() => {
     if (formData.checkIn && formData.checkOut && formData.roomId) {
-      const inDate = dayjs(formData.checkIn);
-      const outDate = dayjs(formData.checkOut);
-      if (outDate.isAfter(inDate)) {
-        const days = outDate.diff(inDate, 'day');
+      if (formData.checkOut > formData.checkIn) {
+        const days = diffDays(formData.checkIn, formData.checkOut);
         const room = rooms.find(r => r.id === formData.roomId);
-        if (room) {
-          setFormData(prev => ({ ...prev, totalPrice: days * room.price }));
-        }
+        if (room) setFormData(prev => ({ ...prev, totalPrice: days * room.price }));
       }
     }
   }, [formData.checkIn, formData.checkOut, formData.roomId, rooms]);
 
   const filteredBookings = useMemo(() => {
     return bookings.filter(b => {
-      const matchSearch = b.customerName.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          b.phone.includes(searchTerm);
+      const matchSearch = b.customerName.toLowerCase().includes(searchTerm.toLowerCase()) || b.phone.includes(searchTerm);
       const matchStatus = filterStatus === 'ALL' || b.status === filterStatus;
       return matchSearch && matchStatus;
     });
@@ -548,7 +562,7 @@ function BookingsView({ bookings, rooms }) {
       setEditingId(booking.id);
     } else {
       setFormData({
-        checkIn: dayjs().format('YYYY-MM-DD'), checkOut: dayjs().add(1, 'day').format('YYYY-MM-DD'), 
+        checkIn: getToday(), checkOut: addDays(getToday(), 1), 
         roomId: rooms[0]?.id || '', customerName: '', phone: '', email: '', 
         guests: 1, totalPrice: 0, status: '待付款', notes: ''
       });
@@ -560,79 +574,62 @@ function BookingsView({ bookings, rooms }) {
   const checkOverlap = (checkIn, checkOut, roomId, excludeId) => {
     return bookings.some(b => {
       if (b.id === excludeId || b.roomId !== roomId || b.status === '已取消') return false;
-      const bIn = dayjs(b.checkIn);
-      const bOut = dayjs(b.checkOut);
-      const nIn = dayjs(checkIn);
-      const nOut = dayjs(checkOut);
-      // overlap condition
-      return nIn.isBefore(bOut) && nOut.isAfter(bIn);
+      return checkIn < b.checkOut && checkOut > b.checkIn;
     });
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (dayjs(formData.checkOut).isSameOrBefore(formData.checkIn)) {
-      return toast.error('退房日期必須晚於入住日期');
-    }
-    if (formData.totalPrice < 0) return toast.error('金額不能為負數');
-
+    if (formData.checkOut <= formData.checkIn) return showToast('退房日期必須晚於入住日期', 'error');
+    if (formData.totalPrice < 0) return showToast('金額不能為負數', 'error');
     if (checkOverlap(formData.checkIn, formData.checkOut, formData.roomId, editingId)) {
-      return toast.error('該房型在所選日期已有訂房，請選擇其他日期或房型');
+      return showToast('該房型在所選日期已有訂房，請選擇其他日期或房型', 'error');
     }
 
     const dataToSave = {
-      ...formData,
-      customerName: formData.customerName.trim(),
-      phone: formData.phone.trim(),
-      updatedAt: new Date().toISOString()
+      ...formData, customerName: formData.customerName.trim(), phone: formData.phone.trim(), updatedAt: new Date().toISOString()
     };
 
     try {
       if (editingId) {
         await updateDoc(getDocRef('bookings', editingId), dataToSave);
-        toast.success('訂房已更新');
+        showToast('訂房已更新');
       } else {
         dataToSave.createdAt = new Date().toISOString();
         await addDoc(getColRef('bookings'), dataToSave);
-        
-        // Auto add to customers if new phone
         addDoc(getColRef('customers'), {
           name: dataToSave.customerName, phone: dataToSave.phone, email: dataToSave.email, 
           idNumber: '', notes: '', lastVisit: dataToSave.checkIn
-        }).catch(e=>console.log("Customer save error ignore if dup", e));
-
-        toast.success('訂房新增成功');
+        }).catch(e=>console.log("Ignore dup", e));
+        showToast('訂房新增成功');
       }
       setIsModalOpen(false);
     } catch (error) {
-      toast.error('儲存失敗：' + error.message);
+      showToast('儲存失敗：' + error.message, 'error');
     }
   };
 
   const handleDelete = async () => {
     try {
       await deleteDoc(getDocRef('bookings', deleteConfirm.id));
-      toast.success('訂房已刪除');
+      showToast('訂房已刪除');
     } catch (error) {
-      toast.error('刪除失敗');
+      showToast('刪除失敗', 'error');
     }
   };
 
   const exportCSV = () => {
     const headers = ['入住日期', '退房日期', '客戶姓名', '電話', '房型', '金額', '狀態', '備註'];
-    const csvContent = [
-      headers.join(','),
-      ...filteredBookings.map(b => [
+    const csvContent = [headers.join(','), ...filteredBookings.map(b => [
         b.checkIn, b.checkOut, `"${b.customerName}"`, `"${b.phone}"`, 
         `"${rooms.find(r=>r.id===b.roomId)?.name||''}"`, b.totalPrice, b.status, `"${b.notes}"`
-      ].join(','))
-    ].join('\n');
+      ].join(','))].join('\n');
     
     const blob = new Blob(["\ufeff"+csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `訂房紀錄_${dayjs().format('YYYYMMDD')}.csv`);
+    link.href = url;
+    link.download = `訂房紀錄_${getToday().replace(/-/g, '')}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -644,11 +641,7 @@ function BookingsView({ bookings, rooms }) {
         <div className="flex gap-2 w-full sm:w-auto">
           <div className="relative flex-1 sm:w-64">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input 
-              type="text" placeholder="搜尋姓名或電話..." 
-              value={searchTerm} onChange={e=>setSearchTerm(e.target.value)}
-              className={`${THEME.input} pl-10`}
-            />
+            <input type="text" placeholder="搜尋姓名或電話..." value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} className={`${THEME.input} pl-10`} />
           </div>
           <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className={THEME.input}>
             <option value="ALL">所有狀態</option>
@@ -677,38 +670,18 @@ function BookingsView({ bookings, rooms }) {
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
               {filteredBookings.length === 0 ? (
-                <tr>
-                  <td colSpan="6" className="p-8 text-center text-slate-500">目前沒有符合的訂單</td>
-                </tr>
+                <tr><td colSpan="6" className="p-8 text-center text-slate-500">目前沒有符合的訂單</td></tr>
               ) : filteredBookings.map(b => (
                 <tr key={b.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
-                  <td className="p-4">
-                    <div className="font-medium text-slate-800 dark:text-slate-200">{b.customerName}</div>
-                    <div className="text-sm text-slate-500">{b.phone}</div>
-                  </td>
-                  <td className="p-4 text-slate-700 dark:text-slate-300">
-                    {rooms.find(r => r.id === b.roomId)?.name || '未知房型'}
-                  </td>
-                  <td className="p-4 text-sm text-slate-600 dark:text-slate-400">
-                    <div>{b.checkIn}</div>
-                    <div className="text-slate-400">至 {b.checkOut}</div>
-                  </td>
-                  <td className="p-4 text-right font-medium text-slate-800 dark:text-slate-200">
-                    ${Number(b.totalPrice).toLocaleString()}
-                  </td>
-                  <td className="p-4">
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[b.status] || 'bg-gray-100 text-gray-800'}`}>
-                      {b.status}
-                    </span>
-                  </td>
+                  <td className="p-4"><div className="font-medium text-slate-800 dark:text-slate-200">{b.customerName}</div><div className="text-sm text-slate-500">{b.phone}</div></td>
+                  <td className="p-4 text-slate-700 dark:text-slate-300">{rooms.find(r => r.id === b.roomId)?.name || '未知房型'}</td>
+                  <td className="p-4 text-sm text-slate-600 dark:text-slate-400"><div>{b.checkIn}</div><div className="text-slate-400">至 {b.checkOut}</div></td>
+                  <td className="p-4 text-right font-medium text-slate-800 dark:text-slate-200">${Number(b.totalPrice).toLocaleString()}</td>
+                  <td className="p-4"><span className={`px-3 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[b.status] || 'bg-gray-100 text-gray-800'}`}>{b.status}</span></td>
                   <td className="p-4">
                     <div className="flex justify-center gap-2">
-                      <button onClick={() => openModal(b)} className="p-2 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors">
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => setDeleteConfirm({ isOpen: true, id: b.id, name: `${b.customerName} (${b.checkIn})` })} className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-lg transition-colors">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <button onClick={() => openModal(b)} className="p-2 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg"><Edit className="w-4 h-4" /></button>
+                      <button onClick={() => setDeleteConfirm({ isOpen: true, id: b.id, name: `${b.customerName} (${b.checkIn})` })} className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-lg"><Trash2 className="w-4 h-4" /></button>
                     </div>
                   </td>
                 </tr>
@@ -721,54 +694,16 @@ function BookingsView({ bookings, rooms }) {
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingId ? '編輯訂房' : '新增訂房'}>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">入住日期 *</label>
-              <input type="date" required value={formData.checkIn} onChange={e=>setFormData({...formData, checkIn: e.target.value})} className={THEME.input} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">退房日期 *</label>
-              <input type="date" required value={formData.checkOut} onChange={e=>setFormData({...formData, checkOut: e.target.value})} className={THEME.input} min={dayjs(formData.checkIn).add(1,'day').format('YYYY-MM-DD')} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">房型 *</label>
-              <select required value={formData.roomId} onChange={e=>setFormData({...formData, roomId: e.target.value})} className={THEME.input}>
-                <option value="" disabled>請選擇房型</option>
-                {rooms.map(r => <option key={r.id} value={r.id}>{r.name} (${r.price}/晚)</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">入住人數 *</label>
-              <input type="number" min="1" required value={formData.guests} onChange={e=>setFormData({...formData, guests: e.target.value})} className={THEME.input} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">客戶姓名 *</label>
-              <input type="text" required value={formData.customerName} onChange={e=>setFormData({...formData, customerName: e.target.value})} className={THEME.input} placeholder="王小明" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">聯絡電話 *</label>
-              <input type="tel" required value={formData.phone} onChange={e=>setFormData({...formData, phone: e.target.value})} className={THEME.input} placeholder="0912345678" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Email</label>
-              <input type="email" value={formData.email} onChange={e=>setFormData({...formData, email: e.target.value})} className={THEME.input} placeholder="example@email.com" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">狀態</label>
-              <select value={formData.status} onChange={e=>setFormData({...formData, status: e.target.value})} className={THEME.input}>
-                {Object.keys(STATUS_COLORS).map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">總金額 *</label>
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">$</span>
-                <input type="number" min="0" required value={formData.totalPrice} onChange={e=>setFormData({...formData, totalPrice: e.target.value})} className={`${THEME.input} pl-8 font-bold text-indigo-600 dark:text-indigo-400`} />
-              </div>
-            </div>
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">備註</label>
-              <textarea rows="3" value={formData.notes} onChange={e=>setFormData({...formData, notes: e.target.value})} className={THEME.input} placeholder="特殊需求..." />
-            </div>
+            <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">入住日期 *</label><input type="date" required value={formData.checkIn} onChange={e=>setFormData({...formData, checkIn: e.target.value})} className={THEME.input} /></div>
+            <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">退房日期 *</label><input type="date" required value={formData.checkOut} onChange={e=>setFormData({...formData, checkOut: e.target.value})} className={THEME.input} min={addDays(formData.checkIn, 1)} /></div>
+            <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">房型 *</label><select required value={formData.roomId} onChange={e=>setFormData({...formData, roomId: e.target.value})} className={THEME.input}><option value="" disabled>請選擇房型</option>{rooms.map(r => <option key={r.id} value={r.id}>{r.name} (${r.price}/晚)</option>)}</select></div>
+            <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">入住人數 *</label><input type="number" min="1" required value={formData.guests} onChange={e=>setFormData({...formData, guests: e.target.value})} className={THEME.input} /></div>
+            <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">客戶姓名 *</label><input type="text" required value={formData.customerName} onChange={e=>setFormData({...formData, customerName: e.target.value})} className={THEME.input} placeholder="王小明" /></div>
+            <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">聯絡電話 *</label><input type="tel" required value={formData.phone} onChange={e=>setFormData({...formData, phone: e.target.value})} className={THEME.input} placeholder="0912345678" /></div>
+            <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Email</label><input type="email" value={formData.email} onChange={e=>setFormData({...formData, email: e.target.value})} className={THEME.input} placeholder="example@email.com" /></div>
+            <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">狀態</label><select value={formData.status} onChange={e=>setFormData({...formData, status: e.target.value})} className={THEME.input}>{Object.keys(STATUS_COLORS).map(s => <option key={s} value={s}>{s}</option>)}</select></div>
+            <div className="md:col-span-2"><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">總金額 *</label><div className="relative"><span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">$</span><input type="number" min="0" required value={formData.totalPrice} onChange={e=>setFormData({...formData, totalPrice: e.target.value})} className={`${THEME.input} pl-8 font-bold text-indigo-600 dark:text-indigo-400`} /></div></div>
+            <div className="md:col-span-2"><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">備註</label><textarea rows="3" value={formData.notes} onChange={e=>setFormData({...formData, notes: e.target.value})} className={THEME.input} placeholder="特殊需求..." /></div>
           </div>
           <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-700 mt-6">
             <button type="button" onClick={() => setIsModalOpen(false)} className={THEME.buttonSecondary}>取消</button>
@@ -777,63 +712,38 @@ function BookingsView({ bookings, rooms }) {
         </form>
       </Modal>
 
-      <ConfirmDialog 
-        isOpen={deleteConfirm.isOpen} 
-        onClose={() => setDeleteConfirm({ isOpen: false, id: null, name: '' })}
-        onConfirm={handleDelete}
-        title="確認刪除訂房"
-        message={`確定要刪除「${deleteConfirm.name}」的訂房紀錄嗎？此操作無法復原。`}
-      />
+      <ConfirmDialog isOpen={deleteConfirm.isOpen} onClose={() => setDeleteConfirm({ isOpen: false, id: null, name: '' })} onConfirm={handleDelete} title="確認刪除訂房" message={`確定要刪除「${deleteConfirm.name}」的訂房紀錄嗎？此操作無法復原。`} />
     </div>
   );
 }
 
-// --- Rooms View ---
-function RoomsView({ rooms }) {
+function RoomsView({ rooms, showToast }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState({ isOpen: false, id: null, name: '' });
-  const [formData, setFormData] = useState({
-    name: '', price: 0, capacity: 2, description: '', photoUrl: ''
-  });
+  const [formData, setFormData] = useState({ name: '', price: 0, capacity: 2, description: '', photoUrl: '' });
 
   const openModal = (room = null) => {
-    if (room) {
-      setFormData(room);
-      setEditingId(room.id);
-    } else {
-      setFormData({ name: '', price: 0, capacity: 2, description: '', photoUrl: '' });
-      setEditingId(null);
-    }
+    if (room) { setFormData(room); setEditingId(room.id); } 
+    else { setFormData({ name: '', price: 0, capacity: 2, description: '', photoUrl: '' }); setEditingId(null); }
     setIsModalOpen(true);
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (formData.price < 0) return toast.error('價格不能為負數');
+    if (formData.price < 0) return showToast('價格不能為負數', 'error');
     const dataToSave = { ...formData, name: formData.name.trim() };
     
     try {
-      if (editingId) {
-        await updateDoc(getDocRef('rooms', editingId), dataToSave);
-        toast.success('房型已更新');
-      } else {
-        await addDoc(getColRef('rooms'), dataToSave);
-        toast.success('房型新增成功');
-      }
+      if (editingId) { await updateDoc(getDocRef('rooms', editingId), dataToSave); showToast('房型已更新'); } 
+      else { await addDoc(getColRef('rooms'), dataToSave); showToast('房型新增成功'); }
       setIsModalOpen(false);
-    } catch (error) {
-      toast.error('儲存失敗：' + error.message);
-    }
+    } catch (error) { showToast('儲存失敗：' + error.message, 'error'); }
   };
 
   const handleDelete = async () => {
-    try {
-      await deleteDoc(getDocRef('rooms', deleteConfirm.id));
-      toast.success('房型已刪除');
-    } catch (error) {
-      toast.error('刪除失敗');
-    }
+    try { await deleteDoc(getDocRef('rooms', deleteConfirm.id)); showToast('房型已刪除'); } 
+    catch (error) { showToast('刪除失敗', 'error'); }
   };
 
   return (
@@ -851,22 +761,16 @@ function RoomsView({ rooms }) {
             <div className="h-48 bg-slate-200 dark:bg-slate-700 relative overflow-hidden">
               {room.photoUrl ? (
                 <img src={room.photoUrl} alt={room.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" onError={(e)=>e.target.style.display='none'} />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-slate-400"><BedDouble className="w-12 h-12" /></div>
-              )}
-              <div className="absolute top-4 right-4 bg-black/50 backdrop-blur-md text-white px-3 py-1 rounded-full font-bold">
-                ${room.price} / 晚
-              </div>
+              ) : <div className="w-full h-full flex items-center justify-center text-slate-400"><BedDouble className="w-12 h-12" /></div>}
+              <div className="absolute top-4 right-4 bg-black/50 backdrop-blur-md text-white px-3 py-1 rounded-full font-bold">${room.price} / 晚</div>
             </div>
             <div className="p-5 flex-1 flex flex-col">
               <h3 className="text-xl font-bold text-slate-800 dark:text-white mb-2">{room.name}</h3>
-              <div className="flex items-center gap-2 text-sm text-slate-500 mb-4">
-                <Users className="w-4 h-4" /> <span>可住 {room.capacity} 人</span>
-              </div>
+              <div className="flex items-center gap-2 text-sm text-slate-500 mb-4"><Users className="w-4 h-4" /> <span>可住 {room.capacity} 人</span></div>
               <p className="text-slate-600 dark:text-slate-400 text-sm flex-1 line-clamp-3 mb-4">{room.description}</p>
               <div className="flex justify-end gap-2 pt-4 border-t border-slate-100 dark:border-slate-700/50">
-                <button onClick={() => openModal(room)} className="p-2 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors"><Edit className="w-4 h-4" /></button>
-                <button onClick={() => setDeleteConfirm({ isOpen: true, id: room.id, name: room.name })} className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
+                <button onClick={() => openModal(room)} className="p-2 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg"><Edit className="w-4 h-4" /></button>
+                <button onClick={() => setDeleteConfirm({ isOpen: true, id: room.id, name: room.name })} className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-lg"><Trash2 className="w-4 h-4" /></button>
               </div>
             </div>
           </Card>
@@ -875,85 +779,43 @@ function RoomsView({ rooms }) {
 
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingId ? '編輯房型' : '新增房型'}>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">房型名稱 *</label>
-            <input type="text" required value={formData.name} onChange={e=>setFormData({...formData, name: e.target.value})} className={THEME.input} />
-          </div>
+          <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">房型名稱 *</label><input type="text" required value={formData.name} onChange={e=>setFormData({...formData, name: e.target.value})} className={THEME.input} /></div>
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">價格 (每晚) *</label>
-              <input type="number" min="0" required value={formData.price} onChange={e=>setFormData({...formData, price: e.target.value})} className={THEME.input} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">可入住人數 *</label>
-              <input type="number" min="1" required value={formData.capacity} onChange={e=>setFormData({...formData, capacity: e.target.value})} className={THEME.input} />
-            </div>
+            <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">價格 (每晚) *</label><input type="number" min="0" required value={formData.price} onChange={e=>setFormData({...formData, price: e.target.value})} className={THEME.input} /></div>
+            <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">可入住人數 *</label><input type="number" min="1" required value={formData.capacity} onChange={e=>setFormData({...formData, capacity: e.target.value})} className={THEME.input} /></div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">照片 URL</label>
-            <input type="url" value={formData.photoUrl} onChange={e=>setFormData({...formData, photoUrl: e.target.value})} className={THEME.input} placeholder="https://..." />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">房型介紹</label>
-            <textarea rows="4" value={formData.description} onChange={e=>setFormData({...formData, description: e.target.value})} className={THEME.input} />
-          </div>
-          <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-700 mt-6">
-            <button type="button" onClick={() => setIsModalOpen(false)} className={THEME.buttonSecondary}>取消</button>
-            <button type="submit" className={THEME.buttonPrimary}><Save className="w-4 h-4"/> 儲存</button>
-          </div>
+          <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">照片 URL</label><input type="url" value={formData.photoUrl} onChange={e=>setFormData({...formData, photoUrl: e.target.value})} className={THEME.input} placeholder="https://..." /></div>
+          <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">房型介紹</label><textarea rows="4" value={formData.description} onChange={e=>setFormData({...formData, description: e.target.value})} className={THEME.input} /></div>
+          <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-700 mt-6"><button type="button" onClick={() => setIsModalOpen(false)} className={THEME.buttonSecondary}>取消</button><button type="submit" className={THEME.buttonPrimary}><Save className="w-4 h-4"/> 儲存</button></div>
         </form>
       </Modal>
-
       <ConfirmDialog isOpen={deleteConfirm.isOpen} onClose={() => setDeleteConfirm({ isOpen: false, id: null, name: '' })} onConfirm={handleDelete} title="確認刪除房型" message={`確定要刪除「${deleteConfirm.name}」嗎？若該房型已有歷史訂單，建議改為隱藏而非刪除以保留紀錄。`} />
     </div>
   );
 }
 
-// --- Customers View ---
 function CustomersView({ customers, bookings }) {
   const [searchTerm, setSearchTerm] = useState('');
-
-  const filteredCustomers = useMemo(() => {
-    return customers.filter(c => 
-      c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-      c.phone.includes(searchTerm) ||
-      (c.idNumber && c.idNumber.includes(searchTerm))
-    );
-  }, [customers, searchTerm]);
+  const filteredCustomers = useMemo(() => customers.filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase()) || c.phone.includes(searchTerm) || (c.idNumber && c.idNumber.includes(searchTerm))), [customers, searchTerm]);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="flex gap-2 max-w-sm">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input type="text" placeholder="搜尋客戶姓名、電話或身分證..." value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} className={`${THEME.input} pl-10`} />
-        </div>
-      </div>
-
+      <div className="flex gap-2 max-w-sm"><div className="relative flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" /><input type="text" placeholder="搜尋客戶姓名、電話或身分證..." value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} className={`${THEME.input} pl-10`} /></div></div>
       <Card className="p-0 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 text-sm border-b border-slate-200 dark:border-slate-700">
-                <th className="p-4 font-medium">姓名</th>
-                <th className="p-4 font-medium">聯絡方式</th>
-                <th className="p-4 font-medium">身分證/護照</th>
-                <th className="p-4 font-medium">歷史訂單數</th>
-                <th className="p-4 font-medium">備註</th>
+                <th className="p-4 font-medium">姓名</th><th className="p-4 font-medium">聯絡方式</th><th className="p-4 font-medium">身分證/護照</th><th className="p-4 font-medium">歷史訂單數</th><th className="p-4 font-medium">備註</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
-              {filteredCustomers.length === 0 ? (
-                <tr><td colSpan="5" className="p-8 text-center text-slate-500">無客戶資料</td></tr>
-              ) : filteredCustomers.map(c => {
+              {filteredCustomers.length === 0 ? <tr><td colSpan="5" className="p-8 text-center text-slate-500">無客戶資料</td></tr> : filteredCustomers.map(c => {
                 const historyCount = bookings.filter(b => b.phone === c.phone).length;
                 return (
                   <tr key={c.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
                     <td className="p-4 font-medium text-slate-800 dark:text-slate-200">{c.name}</td>
-                    <td className="p-4 text-sm text-slate-600 dark:text-slate-400">
-                      <div>{c.phone}</div>
-                      <div>{c.email}</div>
-                    </td>
+                    <td className="p-4 text-sm text-slate-600 dark:text-slate-400"><div>{c.phone}</div><div>{c.email}</div></td>
                     <td className="p-4 text-sm text-slate-600 dark:text-slate-400">{c.idNumber || '-'}</td>
                     <td className="p-4 text-sm font-medium text-indigo-600 dark:text-indigo-400">{historyCount} 筆</td>
                     <td className="p-4 text-sm text-slate-500 truncate max-w-xs">{c.notes || '-'}</td>
@@ -968,34 +830,35 @@ function CustomersView({ customers, bookings }) {
   );
 }
 
-// --- Calendar View ---
 function CalendarView({ bookings, rooms }) {
-  const [currentDate, setCurrentDate] = useState(dayjs());
+  const [currentMonthDate, setCurrentMonthDate] = useState(() => {
+    const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
   const [selectedDay, setSelectedDay] = useState(null);
 
-  const daysInMonth = currentDate.daysInMonth();
-  const firstDayOfMonth = currentDate.startOf('month').day();
+  const daysInMonth = new Date(currentMonthDate.getFullYear(), currentMonthDate.getMonth() + 1, 0).getDate();
+  const firstDayOfMonth = currentMonthDate.getDay();
   
   const generateCalendar = () => {
     const days = [];
     for (let i = 0; i < firstDayOfMonth; i++) days.push(null);
-    for (let i = 1; i <= daysInMonth; i++) days.push(currentDate.date(i));
+    for (let i = 1; i <= daysInMonth; i++) {
+      days.push(formatDate(new Date(currentMonthDate.getFullYear(), currentMonthDate.getMonth(), i)));
+    }
     return days;
   };
 
-  const getBookingsForDay = (dateStr) => {
-    return bookings.filter(b => b.status !== '已取消' && dayjs(dateStr).isBetween(b.checkIn, b.checkOut, 'day', '[)'));
-  };
+  const getBookingsForDay = (dateStr) => bookings.filter(b => b.status !== '已取消' && isBetweenDates(dateStr, b.checkIn, b.checkOut));
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 flex flex-col lg:flex-row gap-6">
       <Card className="flex-1">
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white">{currentDate.format('YYYY年 MM月')}</h2>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white">{currentMonthDate.getFullYear()}年 {String(currentMonthDate.getMonth() + 1).padStart(2, '0')}月</h2>
           <div className="flex gap-2">
-            <button onClick={() => setCurrentDate(c => c.subtract(1, 'month'))} className={THEME.buttonSecondary}>上個月</button>
-            <button onClick={() => setCurrentDate(dayjs())} className={THEME.buttonSecondary}>今天</button>
-            <button onClick={() => setCurrentDate(c => c.add(1, 'month'))} className={THEME.buttonSecondary}>下個月</button>
+            <button onClick={() => setCurrentMonthDate(d => new Date(d.getFullYear(), d.getMonth() - 1, 1))} className={THEME.buttonSecondary}>上個月</button>
+            <button onClick={() => { const d = new Date(); setCurrentMonthDate(new Date(d.getFullYear(), d.getMonth(), 1)); }} className={THEME.buttonSecondary}>今天</button>
+            <button onClick={() => setCurrentMonthDate(d => new Date(d.getFullYear(), d.getMonth() + 1, 1))} className={THEME.buttonSecondary}>下個月</button>
           </div>
         </div>
         
@@ -1003,18 +866,16 @@ function CalendarView({ bookings, rooms }) {
           {['日', '一', '二', '三', '四', '五', '六'].map(d => <div key={d} className="font-bold text-slate-500 py-2">{d}</div>)}
         </div>
         <div className="grid grid-cols-7 gap-1 sm:gap-2">
-          {generateCalendar().map((day, idx) => {
-            if (!day) return <div key={`empty-${idx}`} className="p-2" />;
-            const dateStr = day.format('YYYY-MM-DD');
+          {generateCalendar().map((dateStr, idx) => {
+            if (!dateStr) return <div key={`empty-${idx}`} className="p-2" />;
             const dayBookings = getBookingsForDay(dateStr);
-            const isToday = day.isSame(dayjs(), 'day');
-            const isFull = dayBookings.length >= (rooms.length || 1); // rough full check
+            const isToday = dateStr === getToday();
+            const isFull = dayBookings.length >= (rooms.length || 1);
             const isSelected = selectedDay === dateStr;
 
             return (
               <div 
-                key={dateStr}
-                onClick={() => setSelectedDay(dateStr)}
+                key={dateStr} onClick={() => setSelectedDay(dateStr)}
                 className={`min-h-[80px] p-1 sm:p-2 border rounded-xl cursor-pointer transition-all ${
                   isSelected ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30' : 
                   isToday ? 'border-amber-400 bg-amber-50 dark:bg-amber-900/20' : 
@@ -1022,7 +883,7 @@ function CalendarView({ bookings, rooms }) {
                 }`}
               >
                 <div className={`text-xs sm:text-sm font-medium w-6 h-6 flex items-center justify-center rounded-full ${isToday ? 'bg-amber-500 text-white' : 'text-slate-700 dark:text-slate-300'}`}>
-                  {day.date()}
+                  {parseInt(dateStr.split('-')[2], 10)}
                 </div>
                 <div className="mt-1 flex flex-wrap gap-1">
                   {dayBookings.length > 0 && (
@@ -1037,17 +898,14 @@ function CalendarView({ bookings, rooms }) {
         </div>
       </Card>
 
-      {/* Side Panel for selected day */}
       <div className="w-full lg:w-80">
         <Card className="h-full">
           <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-4 border-b border-slate-100 dark:border-slate-700 pb-2">
-            {selectedDay ? dayjs(selectedDay).format('YYYY-MM-DD') : '請選擇日期'}
+            {selectedDay || '請選擇日期'}
           </h3>
           {selectedDay ? (
             <div className="space-y-3">
-              {getBookingsForDay(selectedDay).length === 0 ? (
-                <p className="text-sm text-slate-500 text-center py-4">本日尚無訂房</p>
-              ) : (
+              {getBookingsForDay(selectedDay).length === 0 ? <p className="text-sm text-slate-500 text-center py-4">本日尚無訂房</p> : (
                 getBookingsForDay(selectedDay).map(b => (
                   <div key={b.id} className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-100 dark:border-slate-700 text-sm">
                     <div className="font-bold text-slate-800 dark:text-white flex justify-between">
@@ -1060,17 +918,14 @@ function CalendarView({ bookings, rooms }) {
                 ))
               )}
             </div>
-          ) : (
-            <p className="text-sm text-slate-500">點擊左側日曆查看當日入住名單</p>
-          )}
+          ) : <p className="text-sm text-slate-500">點擊左側日曆查看當日入住名單</p>}
         </Card>
       </div>
     </div>
   );
 }
 
-// --- Settings View ---
-function SettingsView({ settings }) {
+function SettingsView({ settings, showToast }) {
   const [formData, setFormData] = useState(settings);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -1078,36 +933,23 @@ function SettingsView({ settings }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (formData.password.trim() === '') return toast.error('密碼不能為空');
+    if (formData.password.trim() === '') return showToast('密碼不能為空', 'error');
     setIsSaving(true);
     try {
       await setDoc(getDocRef('system', 'settings'), formData);
-      toast.success('設定已儲存');
-      // Update local storage if password changed to avoid instant logout
-      if (formData.password !== settings.password) {
-        toast.success('密碼已更新，下次登入請使用新密碼');
-      }
-    } catch (error) {
-      toast.error('儲存失敗');
-    }
+      showToast('設定已儲存');
+      if (formData.password !== settings.password) showToast('密碼已更新，下次登入請使用新密碼');
+    } catch (error) { showToast('儲存失敗', 'error'); }
     setIsSaving(false);
   };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 max-w-2xl mx-auto">
       <Card>
-        <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-6 flex items-center gap-2">
-          <Settings className="w-5 h-5 text-indigo-500"/> 系統設定
-        </h2>
+        <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-6 flex items-center gap-2"><Settings className="w-5 h-5 text-indigo-500"/> 系統設定</h2>
         <form onSubmit={handleSubmit} className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">系統名稱</label>
-            <input type="text" value={formData.systemName} onChange={e=>setFormData({...formData, systemName: e.target.value})} className={THEME.input} required />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">民宿 Logo URL</label>
-            <input type="url" value={formData.logo} onChange={e=>setFormData({...formData, logo: e.target.value})} className={THEME.input} placeholder="https://..." />
-          </div>
+          <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">系統名稱</label><input type="text" value={formData.systemName} onChange={e=>setFormData({...formData, systemName: e.target.value})} className={THEME.input} required /></div>
+          <div><label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">民宿 Logo URL</label><input type="url" value={formData.logo} onChange={e=>setFormData({...formData, logo: e.target.value})} className={THEME.input} placeholder="https://..." /></div>
           <div className="pt-4 border-t border-slate-100 dark:border-slate-700">
             <h3 className="text-md font-bold text-slate-800 dark:text-white mb-4">安全設定</h3>
             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">登入密碼</label>
@@ -1118,29 +960,14 @@ function SettingsView({ settings }) {
             <h3 className="text-md font-bold text-slate-800 dark:text-white mb-4">開發者設定</h3>
             <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/50 rounded-xl p-4 flex gap-3">
               <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
-              <div className="text-sm text-amber-800 dark:text-amber-200">
-                <p className="font-bold mb-1">Firebase 連線狀態：正常</p>
-                <p>目前系統執行於隔離環境，Firebase 設定由系統自動注入以確保功能運作正常。若需在本機運行，請替換程式碼開頭的 `firebaseConfig`。</p>
-              </div>
+              <div className="text-sm text-amber-800 dark:text-amber-200"><p className="font-bold mb-1">Firebase 連線狀態：正常</p><p>目前系統執行於隔離環境，Firebase 設定由系統自動注入以確保功能運作正常。若需在本機運行，請替換程式碼開頭的 `firebaseConfig`。</p></div>
             </div>
           </div>
-          
-          <div className="flex justify-end pt-6">
-            <button type="submit" disabled={isSaving} className={THEME.buttonPrimary}>
-              {isSaving ? '儲存中...' : <><Save className="w-4 h-4"/> 儲存設定</>}
-            </button>
-          </div>
+          <div className="flex justify-end pt-6"><button type="submit" disabled={isSaving} className={THEME.buttonPrimary}>{isSaving ? '儲存中...' : <><Save className="w-4 h-4"/> 儲存設定</>}</button></div>
         </form>
       </Card>
-
       <Card className="bg-gradient-to-br from-indigo-500 to-purple-600 text-white border-none">
-        <div className="flex items-center gap-4">
-          <div className="p-3 bg-white/20 rounded-xl"><Smartphone className="w-6 h-6" /></div>
-          <div>
-            <h3 className="font-bold text-lg">安裝為桌面應用程式 (PWA)</h3>
-            <p className="text-indigo-100 text-sm mt-1">您可以將此系統加入手機主畫面或電腦桌面，獲得更佳的全螢幕體驗。</p>
-          </div>
-        </div>
+        <div className="flex items-center gap-4"><div className="p-3 bg-white/20 rounded-xl"><Smartphone className="w-6 h-6" /></div><div><h3 className="font-bold text-lg">安裝為桌面應用程式 (PWA)</h3><p className="text-indigo-100 text-sm mt-1">您可以將此系統加入手機主畫面或電腦桌面，獲得更佳的全螢幕體驗。</p></div></div>
       </Card>
     </div>
   );
